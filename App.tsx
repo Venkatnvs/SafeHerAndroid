@@ -1,118 +1,172 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+import React, { useEffect } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { StatusBar, PermissionsAndroid, Platform } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import React from 'react';
-import type {PropsWithChildren} from 'react';
-import {
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
+// Import screens
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import SignupScreen from './src/screens/SignupScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import GuardianDashboardScreen from './src/screens/GuardianDashboardScreen';
+import SafeZonesScreen from './src/screens/SafeZonesScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import SelfDefenseScreen from './src/screens/SelfDefenseScreen';
+import EmergencyScreen from './src/screens/EmergencyScreen';
 
-import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+// Import components
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+// Import context
+import { AuthProvider } from './src/context/AuthContext';
+import { LocationProvider } from './src/context/LocationContext';
+import { EmergencyProvider } from './src/context/EmergencyContext';
+import { navigationRef } from './src/utils/NavigationService';
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-  return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
-  );
+const Stack = createStackNavigator();
+const Tab = createBottomTabNavigator();
+
+async function requestNotificationPermission() {
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+  }
 }
 
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
-  };
-
+// Tab Navigator for authenticated users
+function TabNavigator() {
   return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ focused, color, size }) => {
+          let iconName;
+
+          switch (route.name) {
+            case 'Home':
+              iconName = focused ? 'home' : 'home-outline';
+              break;
+            case 'SafeZones':
+              iconName = focused ? 'map-marker' : 'map-marker-outline';
+              break;
+            case 'Guardian':
+              iconName = focused ? 'shield-account' : 'shield-account-outline';
+              break;
+            case 'SelfDefense':
+              iconName = focused ? 'karate' : 'karate-outline';
+              break;
+            case 'Profile':
+              iconName = focused ? 'account' : 'account-outline';
+              break;
+            default:
+              iconName = 'circle';
+          }
+
+          return <Icon name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: '#E91E63',
+        tabBarInactiveTintColor: '#9E9E9E',
+        tabBarStyle: {
+          backgroundColor: '#FFFFFF',
+          borderTopWidth: 1,
+          borderTopColor: '#E0E0E0',
+          paddingBottom: 5,
+          paddingTop: 5,
+          height: 60,
+        },
+        headerShown: false,
+      })}
+    >
+      <Tab.Screen 
+        name="Home" 
+        component={HomeScreen}
+        options={{ title: 'SafeHer' }}
       />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      <Tab.Screen 
+        name="SafeZones" 
+        component={SafeZonesScreen}
+        options={{ title: 'Safe Zones' }}
+      />
+      <Tab.Screen 
+        name="Guardian" 
+        component={GuardianDashboardScreen}
+        options={{ title: 'Guardian' }}
+      />
+      <Tab.Screen 
+        name="SelfDefense" 
+        component={SelfDefenseScreen}
+        options={{ title: 'Self Defense' }}
+      />
+      <Tab.Screen 
+        name="Profile" 
+        component={ProfileScreen}
+        options={{ title: 'Profile' }}
+      />
+    </Tab.Navigator>
   );
 }
 
-const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
-  },
-});
+// Main App Component
+function App(): React.JSX.Element {
+  useEffect(() => {
+    requestNotificationPermission();
+  }, []);
+
+  return (
+    <SafeAreaProvider>
+      <StatusBar barStyle="light-content" backgroundColor="#E91E63" />
+      <AuthProvider>
+        <LocationProvider>
+          <EmergencyProvider>
+            <NavigationContainer ref={navigationRef}>
+              <Stack.Navigator
+                initialRouteName="Onboarding"
+                screenOptions={{
+                  headerStyle: {
+                    backgroundColor: '#E91E63',
+                  },
+                  headerTintColor: '#FFFFFF',
+                  headerTitleStyle: {
+                    fontWeight: 'bold',
+                  },
+                }}
+              >
+                <Stack.Screen 
+                  name="Onboarding" 
+                  component={OnboardingScreen}
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen 
+                  name="Login" 
+                  component={LoginScreen}
+                  options={{ title: 'Login to SafeHer' }}
+                />
+                <Stack.Screen 
+                  name="Signup" 
+                  component={SignupScreen}
+                  options={{ title: 'Create Account' }}
+                />
+                <Stack.Screen 
+                  name="MainApp" 
+                  component={TabNavigator}
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen 
+                  name="Emergency" 
+                  component={EmergencyScreen}
+                  options={{ 
+                    title: 'Emergency',
+                    headerStyle: { backgroundColor: '#F44336' },
+                    presentation: 'modal'
+                  }}
+                />
+              </Stack.Navigator>
+            </NavigationContainer>
+          </EmergencyProvider>
+        </LocationProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}
 
 export default App;
