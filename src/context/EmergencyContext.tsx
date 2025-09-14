@@ -7,6 +7,7 @@ import Voice from '@react-native-voice/voice';
 import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import { navigate } from '../utils/NavigationService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { INDIAN_EMERGENCY_MESSAGES } from '../constants/IndianEmergencyNumbers';
 
 interface EmergencyAlert {
   id: string;
@@ -128,11 +129,26 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
   const triggerSOS = async (message?: string) => {
     const user = auth().currentUser;
     if (!user) return;
+    
+    // Get current location if available
+    let location = { latitude: 0, longitude: 0, accuracy: 0 };
+    try {
+      const userDoc = await firestore().collection('users').doc(user.uid).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        if (userData?.currentLocation) {
+          location = userData.currentLocation;
+        }
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+    }
+
     const alert: Omit<EmergencyAlert, 'id'> = {
       userId: user.uid,
       type: 'sos',
       status: 'active',
-      location: { latitude: 0, longitude: 0, accuracy: 0 },
+      location,
       timestamp: new Date(),
       message: message || 'SOS triggered manually',
       guardianResponses: [],
@@ -142,8 +158,9 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     await startAudioRecording();
     Vibration.vibrate([0, 500, 200, 500]);
     try { navigate('Emergency'); } catch {}
-    // Notify quick contacts via SMS through device
-    await notifyQuickContactsSMS('SOS triggered. I need help.');
+    
+    // Send enhanced SMS with location
+    await sendEmergencySMSWithLocation(location, message || 'SOS triggered manually');
   };
 
   const triggerShakeAlert = async () => {
@@ -226,6 +243,56 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const sendEmail = async (email: string, subject: string, message: string): Promise<void> => {
     await Linking.openURL(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`);
+  };
+
+  const sendEmergencySMSWithLocation = async (location: any, message: string): Promise<void> => {
+    try {
+      const user = auth().currentUser;
+      if (!user) return;
+
+      // Get user data for personalized messages
+      const userDoc = await firestore().collection('users').doc(user.uid).get();
+      const userData = userDoc.exists ? userDoc.data() : null;
+      const userName = userData?.displayName || 'SafeHer User';
+      
+      // Create location string
+      const locationString = location.latitude !== 0 && location.longitude !== 0 
+        ? `📍 Location: ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+        : '📍 Location: Unable to determine';
+      
+      const timeString = new Date().toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      // Send to emergency contacts
+      if (userData?.emergencyContacts && userData.emergencyContacts.length > 0) {
+        for (const contact of userData.emergencyContacts) {
+          if (contact.phone) {
+            const smsMessage = INDIAN_EMERGENCY_MESSAGES.SOS_MESSAGE(locationString, timeString);
+            await sendSMS(contact.phone, smsMessage);
+          }
+        }
+      }
+
+      // Send to guardians
+      if (userData?.guardianEmails && userData.guardianEmails.length > 0) {
+        for (const email of userData.guardianEmails) {
+          const guardianMessage = INDIAN_EMERGENCY_MESSAGES.GUARDIAN_MESSAGE(locationString, timeString, userName);
+          await sendEmail(email, 'SafeHer Emergency Alert', guardianMessage);
+        }
+      }
+
+      // Send to quick dial contacts
+      await notifyQuickContactsSMS(INDIAN_EMERGENCY_MESSAGES.SOS_MESSAGE(locationString, timeString));
+      
+    } catch (error) {
+      console.error('Error sending emergency SMS:', error);
+    }
   };
 
   const notifyQuickContactsSMS = async (message: string): Promise<void> => {

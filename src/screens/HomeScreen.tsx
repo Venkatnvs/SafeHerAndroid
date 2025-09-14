@@ -19,14 +19,21 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { useEmergency } from '../context/EmergencyContext';
 import { useLocation } from '../context/LocationContext';
+import { INDIAN_EMERGENCY_NUMBERS } from '../constants/IndianEmergencyNumbers';
 
 const { width, height } = Dimensions.get('window');
 
 const HomeScreen = () => {
   const navigation = useNavigation();
   const { user } = useAuth();
-  const { triggerSOS, isEmergencyActive, loading } = useEmergency();
-  const { currentLocation, safeZones } = useLocation();
+  const { triggerSOS, currentAlert } = useEmergency();
+  const { 
+    currentLocation, 
+    safeZones, 
+    isLocationEnabled, 
+    requestLocationPermission, 
+    startLocationTracking 
+  } = useLocation();
   
   const [motivationalQuote, setMotivationalQuote] = useState('');
   const [currentTime, setCurrentTime] = useState('');
@@ -60,11 +67,45 @@ const HomeScreen = () => {
       }));
     };
 
-    updateTime();
-    const interval = setInterval(updateTime, 60000);
+    // Update motivational quote every minute
+    const updateQuote = () => {
+      const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
+      setMotivationalQuote(randomQuote);
+    };
 
-    return () => clearInterval(interval);
-  }, []);
+    updateTime();
+    updateQuote();
+    const timeInterval = setInterval(updateTime, 60000);
+    const quoteInterval = setInterval(updateQuote, 60000);
+
+    // Request location permission and start tracking
+    const initializeLocation = async () => {
+      if (!isLocationEnabled) {
+        const granted = await requestLocationPermission();
+        if (granted) {
+          startLocationTracking();
+        } else {
+          Alert.alert(
+            'Location Permission Required',
+            'SafeHer needs location access to provide emergency services and find nearby safe zones. Please enable location permission in settings.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+            ]
+          );
+        }
+      } else {
+        startLocationTracking();
+      }
+    };
+
+    initializeLocation();
+
+    return () => {
+      clearInterval(timeInterval);
+      clearInterval(quoteInterval);
+    };
+  }, [isLocationEnabled, requestLocationPermission, startLocationTracking]);
 
   useEffect(() => {
     (async () => {
@@ -79,7 +120,7 @@ const HomeScreen = () => {
   }, []);
 
   const handleSOSPress = () => {
-    if (isEmergencyActive) {
+    if (currentAlert) {
       Alert.alert(
         'Emergency Active',
         'An emergency is already active. Do you want to resolve it?',
@@ -228,26 +269,25 @@ const HomeScreen = () => {
           <TouchableOpacity
             style={[
               styles.sosButton,
-              isEmergencyActive && styles.sosButtonActive
+              currentAlert && styles.sosButtonActive
             ]}
             onPress={handleSOSPress}
-            disabled={loading}
             activeOpacity={0.8}
           >
             <LinearGradient
-              colors={isEmergencyActive ? ['#F44336', '#D32F2F'] : ['#FF5722', '#E64A19']}
+              colors={currentAlert ? ['#F44336', '#D32F2F'] : ['#FF5722', '#E64A19']}
               style={styles.sosButtonGradient}
             >
               <Icon 
-                name={isEmergencyActive ? "phone-alert" : "alert-circle"} 
+                name={currentAlert ? "phone-alert" : "alert-circle"} 
                 size={80} 
                 color="white" 
               />
               <Text style={styles.sosButtonText}>
-                {isEmergencyActive ? 'EMERGENCY ACTIVE' : 'SOS'}
+                {currentAlert ? 'EMERGENCY ACTIVE' : 'SOS'}
               </Text>
               <Text style={styles.sosButtonSubtext}>
-                {isEmergencyActive ? 'Tap to resolve' : 'Tap for help'}
+                {currentAlert ? 'Tap to resolve' : 'Tap for help'}
               </Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -298,7 +338,7 @@ const HomeScreen = () => {
               icon="phone"
               title="Emergency"
               subtitle="Call 112"
-              onPress={() => navigation.navigate('Emergency' as never)}
+              onPress={() => callPhoneNumber(INDIAN_EMERGENCY_NUMBERS.NATIONAL_EMERGENCY)}
               color="#F44336"
             />
           </View>
@@ -319,10 +359,28 @@ const HomeScreen = () => {
           </View>
         )}
 
+        {/* Indian Emergency Numbers */}
+        <View style={styles.emergencyNumbersSection}>
+          <Text style={styles.sectionTitle}>Indian Emergency Numbers</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {INDIAN_EMERGENCY_NUMBERS.QUICK_DIAL_OPTIONS.map((service, index) => (
+              <TouchableOpacity 
+                key={index} 
+                style={styles.emergencyNumberChip}
+                onPress={() => callPhoneNumber(service.number)}
+              >
+                <Icon name={service.icon} size={20} color="#E91E63" />
+                <Text style={styles.emergencyNumberName}>{service.name}</Text>
+                <Text style={styles.emergencyNumberValue}>{service.number}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
         {/* Emergency Contacts Preview */}
         {user?.emergencyContacts && user.emergencyContacts.length > 0 && (
           <View style={styles.contactsSection}>
-            <Text style={styles.sectionTitle}>Emergency Contacts</Text>
+            <Text style={styles.sectionTitle}>Your Emergency Contacts</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {user.emergencyContacts.slice(0, 5).map((contact, index) => (
                 <View key={contact.id} style={styles.contactChip}>
@@ -344,7 +402,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F5F5',
   },
   header: {
-    paddingTop: 50,
+    paddingTop: 20,
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
@@ -563,6 +621,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     fontWeight: '500',
+  },
+  emergencyNumbersSection: {
+    marginBottom: 30,
+  },
+  emergencyNumberChip: {
+    alignItems: 'center',
+    backgroundColor: 'white',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginRight: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+    minWidth: 80,
+  },
+  emergencyNumberName: {
+    fontSize: 12,
+    color: '#333',
+    fontWeight: '600',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  emergencyNumberValue: {
+    fontSize: 14,
+    color: '#E91E63',
+    fontWeight: 'bold',
+    marginTop: 2,
   },
 });
 

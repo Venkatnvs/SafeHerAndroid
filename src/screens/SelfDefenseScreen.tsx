@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,11 +6,29 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
+  Linking,
+  Alert,
+  Modal,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+interface SelfDefenseTopic {
+  id: number;
+  title: string;
+  subtitle: string;
+  icon: string;
+  color: string;
+  duration: string;
+  level: string;
+  youtubeId: string;
+  description: string;
+  techniques: string[];
+}
+
 const SelfDefenseScreen = () => {
+  const [selectedVideo, setSelectedVideo] = useState<SelfDefenseTopic | null>(null);
+
   const selfDefenseTopics = [
     {
       id: 1,
@@ -20,6 +38,9 @@ const SelfDefenseScreen = () => {
       color: '#FF9800',
       duration: '15 min',
       level: 'Beginner',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual self-defense video ID
+      description: 'Master the essential self-defense moves that can save your life. Learn proper stance, basic strikes, and defensive positioning.',
+      techniques: ['Proper stance and balance', 'Basic palm strikes', 'Elbow strikes', 'Knee strikes', 'Defensive positioning']
     },
     {
       id: 2,
@@ -29,6 +50,9 @@ const SelfDefenseScreen = () => {
       color: '#2196F3',
       duration: '10 min',
       level: 'Beginner',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual video ID
+      description: 'Develop your awareness skills to prevent dangerous situations before they happen.',
+      techniques: ['Environmental scanning', 'Body language reading', 'Trusting your instincts', 'Escape route planning', 'Avoiding distractions']
     },
     {
       id: 3,
@@ -38,6 +62,9 @@ const SelfDefenseScreen = () => {
       color: '#4CAF50',
       duration: '20 min',
       level: 'Intermediate',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual video ID
+      description: 'Learn effective techniques to escape from various holds and grabs.',
+      techniques: ['Wrist grab escapes', 'Choke hold escapes', 'Hair grab defense', 'Bear hug escapes', 'Ground escape techniques']
     },
     {
       id: 4,
@@ -47,6 +74,9 @@ const SelfDefenseScreen = () => {
       color: '#9C27B0',
       duration: '12 min',
       level: 'Beginner',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual video ID
+      description: 'Master the art of verbal self-defense to de-escalate potentially dangerous situations.',
+      techniques: ['Assertive communication', 'Boundary setting', 'De-escalation tactics', 'Confident body language', 'Emergency phrases']
     },
     {
       id: 5,
@@ -56,6 +86,9 @@ const SelfDefenseScreen = () => {
       color: '#F44336',
       duration: '25 min',
       level: 'Advanced',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual video ID
+      description: 'Advanced techniques for defending against armed attackers (knife, gun, blunt objects).',
+      techniques: ['Knife defense basics', 'Gun disarm techniques', 'Improvised weapons', 'Distance management', 'Escape strategies']
     },
     {
       id: 6,
@@ -65,6 +98,9 @@ const SelfDefenseScreen = () => {
       color: '#607D8B',
       duration: '18 min',
       level: 'Intermediate',
+      youtubeId: 'dQw4w9WgXcQ', // Replace with actual video ID
+      description: 'Essential ground fighting techniques for self-defense situations.',
+      techniques: ['Guard position', 'Hip escape', 'Sweep techniques', 'Ground striking', 'Getting back to feet']
     },
   ];
 
@@ -79,8 +115,22 @@ const SelfDefenseScreen = () => {
     'Know the emergency numbers for your area',
   ];
 
+  const openYouTubeVideo = (youtubeId: string) => {
+    const youtubeUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+    Linking.openURL(youtubeUrl).catch(err => {
+      Alert.alert('Error', 'Could not open YouTube video. Please try again.');
+    });
+  };
+
+  const openVideoDetails = (topic: any) => {
+    setSelectedVideo(topic);
+  };
+
   const SelfDefenseCard = ({ topic }: any) => (
-    <TouchableOpacity style={styles.topicCard}>
+    <TouchableOpacity 
+      style={styles.topicCard}
+      onPress={() => openVideoDetails(topic)}
+    >
       <View style={[styles.topicIcon, { backgroundColor: topic.color }]}>
         <Icon name={topic.icon} size={32} color="white" />
       </View>
@@ -98,7 +148,20 @@ const SelfDefenseScreen = () => {
           </View>
         </View>
       </View>
-      <Icon name="play-circle" size={32} color={topic.color} />
+      <View style={styles.topicActions}>
+        <TouchableOpacity 
+          style={styles.playButton}
+          onPress={() => openYouTubeVideo(topic.youtubeId)}
+        >
+          <Icon name="play-circle" size={32} color={topic.color} />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.infoButton}
+          onPress={() => openVideoDetails(topic)}
+        >
+          <Icon name="information" size={20} color="#666" />
+        </TouchableOpacity>
+      </View>
     </TouchableOpacity>
   );
 
@@ -193,6 +256,59 @@ const SelfDefenseScreen = () => {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Video Details Modal */}
+      <Modal
+        visible={selectedVideo !== null}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setSelectedVideo(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {selectedVideo && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>{selectedVideo.title}</Text>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={() => setSelectedVideo(null)}
+                  >
+                    <Icon name="close" size={24} color="#666" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.modalBody}>
+                  <Text style={styles.modalDescription}>{selectedVideo.description}</Text>
+                  
+                  <View style={styles.techniquesSection}>
+                    <Text style={styles.techniquesTitle}>Techniques Covered:</Text>
+                    {selectedVideo.techniques.map((technique: string, index: number) => (
+                      <View key={index} style={styles.techniqueItem}>
+                        <Icon name="check-circle" size={16} color="#4CAF50" />
+                        <Text style={styles.techniqueText}>{technique}</Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity
+                      style={[styles.actionButton, { backgroundColor: selectedVideo.color }]}
+                      onPress={() => {
+                        openYouTubeVideo(selectedVideo.youtubeId);
+                        setSelectedVideo(null);
+                      }}
+                    >
+                      <Icon name="play" size={20} color="white" />
+                      <Text style={styles.actionButtonText}>Watch on YouTube</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -203,7 +319,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F5F5',
   },
   header: {
-    paddingTop: 60,
+    paddingTop: 20,
     paddingBottom: 30,
     alignItems: 'center',
   },
@@ -385,6 +501,90 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#BF360C',
     lineHeight: 20,
+  },
+  topicActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  playButton: {
+    padding: 4,
+    marginRight: 8,
+  },
+  infoButton: {
+    padding: 4,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    flex: 1,
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    flex: 1,
+  },
+  modalDescription: {
+    fontSize: 16,
+    color: '#666',
+    lineHeight: 24,
+    marginBottom: 20,
+  },
+  techniquesSection: {
+    marginBottom: 20,
+  },
+  techniquesTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 12,
+  },
+  techniqueItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  techniqueText: {
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+    flex: 1,
+  },
+  modalActions: {
+    marginTop: 20,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
   },
 });
 

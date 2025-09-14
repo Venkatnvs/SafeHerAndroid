@@ -85,7 +85,7 @@ const SignupScreen = () => {
       };
 
       await signUp(formData.email.trim(), formData.password, userData);
-      navigation.navigate('MainApp' as never);
+      // Navigation will be handled automatically by AuthNavigator based on auth state
     } catch (error: any) {
       let errorMessage = 'Signup failed. Please try again.';
       
@@ -161,7 +161,7 @@ const SignupScreen = () => {
           style={styles.header}
         >
           <View style={styles.logoContainer}>
-            <Icon name="shield-heart" size={80} color="white" />
+            <Icon name="shield-check" size={80} color="white" />
             <Text style={styles.appName}>SafeHer</Text>
             <Text style={styles.appTagline}>Join Your Safety Network</Text>
           </View>
@@ -242,24 +242,6 @@ const SignupScreen = () => {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>OR</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Social Signup Buttons */}
-          <TouchableOpacity style={styles.socialButton}>
-            <Icon name="google" size={20} color="#DB4437" />
-            <Text style={styles.socialButtonText}>Sign up with Google</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.socialButton}>
-            <Icon name="apple" size={20} color="#000" />
-            <Text style={styles.socialButtonText}>Sign up with Apple</Text>
-          </TouchableOpacity>
-
           {/* Login Link */}
           <View style={styles.loginContainer}>
             <Text style={styles.loginText}>Already have an account? </Text>
@@ -282,7 +264,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   header: {
-    paddingTop: 60,
+    paddingTop: 20,
     paddingBottom: 40,
     alignItems: 'center',
     justifyContent: 'center',

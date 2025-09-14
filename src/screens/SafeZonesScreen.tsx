@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,16 +6,83 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
+  Linking,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useLocation } from '../context/LocationContext';
+import { INDIAN_EMERGENCY_NUMBERS } from '../constants/IndianEmergencyNumbers';
 
 const SafeZonesScreen = () => {
-  const { safeZones, loading, currentLocation } = useLocation();
+  const { 
+    safeZones, 
+    currentLocation, 
+    isLocationEnabled, 
+    requestLocationPermission, 
+    startLocationTracking,
+    getNearbySafeZones 
+  } = useLocation();
+  
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    if (currentLocation && safeZones.length === 0) {
+      loadNearbySafeZones();
+    }
+  }, [currentLocation]);
+
+  const loadNearbySafeZones = async () => {
+    setLoading(true);
+    try {
+      await getNearbySafeZones();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load nearby safe zones. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadNearbySafeZones();
+    setRefreshing(false);
+  };
+
+  const handleLocationPermission = async () => {
+    const granted = await requestLocationPermission();
+    if (granted) {
+      startLocationTracking();
+    } else {
+      Alert.alert(
+        'Permission Required',
+        'Location access is needed to find nearby safe zones. Please enable it in settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() }
+        ]
+      );
+    }
+  };
+
+  const callEmergencyNumber = (number: string) => {
+    Linking.openURL(`tel:${number}`);
+  };
+
+  const openMaps = (zone: any) => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${zone.latitude},${zone.longitude}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Error', 'Could not open maps. Please try again.');
+    });
+  };
 
   const SafeZoneCard = ({ zone, index }: any) => (
-    <TouchableOpacity style={styles.zoneCard}>
+    <TouchableOpacity 
+      style={styles.zoneCard}
+      onPress={() => openMaps(zone)}
+    >
       <View style={[styles.zoneIcon, { backgroundColor: getZoneColor(zone.type) }]}>
         <Icon name={getZoneIcon(zone.type)} size={24} color="white" />
       </View>
@@ -23,12 +90,28 @@ const SafeZonesScreen = () => {
         <Text style={styles.zoneName}>{zone.name}</Text>
         <Text style={styles.zoneAddress}>{zone.address}</Text>
         <Text style={styles.zoneDistance}>
-          {zone.distance ? `${zone.distance.toFixed(1)} km away` : 'Distance calculating...'}
+          {zone.distance ? `${(zone.distance / 1000).toFixed(1)} km away` : 'Distance calculating...'}
         </Text>
+        {zone.phone && (
+          <Text style={styles.zonePhone}>📞 {zone.phone}</Text>
+        )}
       </View>
-      <TouchableOpacity style={styles.callButton}>
-        <Icon name="phone" size={20} color="#E91E63" />
-      </TouchableOpacity>
+      <View style={styles.zoneActions}>
+        {zone.phone && (
+          <TouchableOpacity 
+            style={styles.callButton}
+            onPress={() => callEmergencyNumber(zone.phone)}
+          >
+            <Icon name="phone" size={20} color="#E91E63" />
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity 
+          style={styles.directionsButton}
+          onPress={() => openMaps(zone)}
+        >
+          <Icon name="directions" size={20} color="#2196F3" />
+        </TouchableOpacity>
+      </View>
     </TouchableOpacity>
   );
 
@@ -73,16 +156,27 @@ const SafeZonesScreen = () => {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Location Status */}
-        {!currentLocation && (
+        {!isLocationEnabled && (
           <View style={styles.locationWarning}>
             <Icon name="crosshairs-gps" size={48} color="#FF9800" />
             <Text style={styles.warningTitle}>Location Access Required</Text>
             <Text style={styles.warningText}>
               SafeHer needs access to your location to show nearby safe zones and emergency services.
             </Text>
-            <TouchableOpacity style={styles.enableLocationButton}>
+            <TouchableOpacity 
+              style={styles.enableLocationButton}
+              onPress={handleLocationPermission}
+            >
               <Text style={styles.enableLocationText}>Enable Location</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Loading State */}
+        {loading && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#2196F3" />
+            <Text style={styles.loadingText}>Finding nearby safe zones...</Text>
           </View>
         )}
 
@@ -100,7 +194,7 @@ const SafeZonesScreen = () => {
               <SafeZoneCard key={zone.id} zone={zone} index={index} />
             ))}
 
-            {safeZones.length === 0 && !loading && (
+            {safeZones.length === 0 && (
               <View style={styles.noZonesFound}>
                 <Icon name="map-marker-off" size={64} color="#CCC" />
                 <Text style={styles.noZonesTitle}>No Safe Zones Found</Text>
@@ -112,35 +206,34 @@ const SafeZonesScreen = () => {
           </>
         )}
 
-        {/* Emergency Numbers */}
+        {/* Indian Emergency Numbers */}
         <View style={styles.emergencySection}>
-          <Text style={styles.emergencyTitle}>Emergency Numbers</Text>
+          <Text style={styles.emergencyTitle}>Indian Emergency Numbers</Text>
           
           <View style={styles.emergencyGrid}>
-            <TouchableOpacity style={styles.emergencyCard}>
-              <Icon name="phone-alert" size={32} color="#F44336" />
-              <Text style={styles.emergencyNumber}>112</Text>
-              <Text style={styles.emergencyLabel}>General Emergency</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.emergencyCard}>
-              <Icon name="police-badge" size={32} color="#2196F3" />
-              <Text style={styles.emergencyNumber}>15</Text>
-              <Text style={styles.emergencyLabel}>Police</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.emergencyCard}>
-              <Icon name="ambulance" size={32} color="#F44336" />
-              <Text style={styles.emergencyNumber}>16</Text>
-              <Text style={styles.emergencyLabel}>Ambulance</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.emergencyCard}>
-              <Icon name="fire-truck" size={32} color="#FF9800" />
-              <Text style={styles.emergencyNumber}>18</Text>
-              <Text style={styles.emergencyLabel}>Fire Brigade</Text>
-            </TouchableOpacity>
+            {INDIAN_EMERGENCY_NUMBERS.QUICK_DIAL_OPTIONS.slice(0, 4).map((service, index) => (
+              <TouchableOpacity 
+                key={index}
+                style={styles.emergencyCard}
+                onPress={() => callEmergencyNumber(service.number)}
+              >
+                <Icon name={service.icon} size={32} color={getZoneColor(service.name.toLowerCase().replace(' ', '_'))} />
+                <Text style={styles.emergencyNumber}>{service.number}</Text>
+                <Text style={styles.emergencyLabel}>{service.name}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
+
+          <TouchableOpacity 
+            style={styles.refreshButton}
+            onPress={handleRefresh}
+            disabled={refreshing}
+          >
+            <Icon name="refresh" size={20} color="#2196F3" />
+            <Text style={styles.refreshText}>
+              {refreshing ? 'Refreshing...' : 'Refresh Safe Zones'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </View>
@@ -153,7 +246,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F5F5',
   },
   header: {
-    paddingTop: 60,
+    paddingTop: 20,
     paddingBottom: 30,
     paddingHorizontal: 20,
   },
@@ -324,6 +417,56 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     textAlign: 'center',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    padding: 40,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    marginTop: 20,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+  },
+  zonePhone: {
+    fontSize: 12,
+    color: '#4CAF50',
+    marginTop: 2,
+  },
+  zoneActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  directionsButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+  },
+  refreshText: {
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#2196F3',
+    fontWeight: '600',
   },
 });
 

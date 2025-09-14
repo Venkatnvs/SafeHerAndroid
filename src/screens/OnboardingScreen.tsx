@@ -8,6 +8,7 @@ import {
   ScrollView,
   StatusBar,
   Animated,
+  Image,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -27,8 +28,9 @@ const OnboardingScreen = () => {
       title: 'Welcome to SafeHer',
       subtitle: 'Your Personal Safety Guardian',
       description: 'SafeHer is designed to keep you safe with instant emergency alerts, real-time location tracking, and quick access to help when you need it most.',
-      icon: 'shield-heart',
+      icon: 'shield-check',
       color: ['#E91E63', '#C2185B'],
+      showLogo: true,
     },
     {
       id: 2,
@@ -37,6 +39,7 @@ const OnboardingScreen = () => {
       description: 'With just one tap, trigger an SOS alert that immediately notifies your guardians, emergency contacts, and dials emergency services.',
       icon: 'alert-circle',
       color: ['#FF5722', '#E64A19'],
+      showLogo: true,
     },
     {
       id: 3,
@@ -45,6 +48,7 @@ const OnboardingScreen = () => {
       description: 'Real-time GPS tracking shows your guardians exactly where you are, while highlighting nearby safe zones like police stations and hospitals.',
       icon: 'crosshairs-gps',
       color: ['#2196F3', '#1976D2'],
+      showLogo: true,   
     },
     {
       id: 4,
@@ -53,6 +57,7 @@ const OnboardingScreen = () => {
       description: 'Build a network of trusted guardians who receive instant alerts and can respond immediately when you need help.',
       icon: 'account-group',
       color: ['#4CAF50', '#388E3C'],
+      showLogo: true,
     },
     {
       id: 5,
@@ -61,6 +66,7 @@ const OnboardingScreen = () => {
       description: 'Access comprehensive self-defense training, safety tips, and emergency preparedness resources to stay empowered and confident.',
       icon: 'karate',
       color: ['#FF9800', '#F57C00'],
+      showLogo: true,
     },
   ];
 
@@ -95,7 +101,19 @@ const OnboardingScreen = () => {
         colors={item.color}
         style={styles.iconContainer}
       >
-        <Icon name={item.icon} size={80} color="white" />
+        {item.showLogo ? (
+          <View style={styles.logoContainer}>
+            <View style={styles.shieldContainer}>
+              <Icon name="shield" size={80} color="white" />
+              <View style={styles.heartOverlay}>
+                <Icon name="heart" size={32} color="white" />
+              </View>
+            </View>
+            <Text style={styles.logoText}>SafeHer</Text>
+          </View>
+        ) : (
+          <Icon name={item.icon} size={80} color="white" />
+        )}
       </LinearGradient>
       
       <Text style={styles.title}>{item.title}</Text>
@@ -184,7 +202,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   header: {
-    paddingTop: 50,
+    paddingTop: 20,
     paddingHorizontal: 20,
     alignItems: 'flex-end',
   },
@@ -218,6 +236,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 4.65,
+  },
+  logoContainer: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heartIcon: {
+    position: 'absolute',
+    bottom: -10,
+    right: -10,
   },
   title: {
     fontSize: 28,
@@ -322,6 +350,26 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     backgroundColor: 'rgba(76, 175, 80, 0.1)',
+  },
+  shieldContainer: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heartOverlay: {
+    position: 'absolute',
+    bottom: -10,
+    right: -10,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 16,
+    padding: 5,
+  },
+  logoText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'white',
+    marginTop: 10,
+    textAlign: 'center',
   },
 });
 
