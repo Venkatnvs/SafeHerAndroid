@@ -8,10 +8,14 @@ import {
   Alert,
   Dimensions,
   StatusBar,
+  Modal,
+  TextInput,
+  FlatList,
 } from 'react-native';
+import { PanGestureHandler } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Contacts from 'react-native-contacts';
-import { request, RESULTS, PERMISSIONS } from 'react-native-permissions';
+import { request, RESULTS, PERMISSIONS, check } from 'react-native-permissions';
 import { Linking, Platform } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -20,6 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import { useEmergency } from '../context/EmergencyContext';
 import { useLocation } from '../context/LocationContext';
 import { INDIAN_EMERGENCY_NUMBERS } from '../constants/IndianEmergencyNumbers';
+import QuotesService, { MotivationalQuote } from '../services/QuotesService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -35,27 +40,17 @@ const HomeScreen = () => {
     startLocationTracking 
   } = useLocation();
   
-  const [motivationalQuote, setMotivationalQuote] = useState('');
+  const [motivationalQuote, setMotivationalQuote] = useState<MotivationalQuote | null>(null);
   const [currentTime, setCurrentTime] = useState('');
   const [quickContacts, setQuickContacts] = useState<{ name: string; phone: string }[]>([]);
-
-  const quotes = [
-    "You are stronger than you think, braver than you believe, and more capable than you know.",
-    "Every woman has the power to protect herself and others. You are that woman.",
-    "Your safety is not a luxury, it's a right. Stand strong, stay safe.",
-    "Courage doesn't mean you're not afraid. It means you don't let fear stop you.",
-    "You are the hero of your own story. Trust your instincts, trust your strength.",
-    "Empowered women empower women. Together we are unstoppable.",
-    "Your voice matters, your safety matters, you matter.",
-    "Strength comes from within. You have everything you need to protect yourself.",
-    "Be bold, be brave, be beautiful. You are enough.",
-    "Every step you take towards safety is a step towards empowerment."
-  ];
+  const [contactModalVisible, setContactModalVisible] = useState(false);
+  const [allContacts, setAllContacts] = useState<{ name: string; phone: string; id: string }[]>([]);
+  const [filteredContacts, setFilteredContacts] = useState<{ name: string; phone: string; id: string }[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedContacts, setSelectedContacts] = useState<{ name: string; phone: string; id: string }[]>([]);
 
   useEffect(() => {
-    // Set random motivational quote
-    const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-    setMotivationalQuote(randomQuote);
+    loadMotivationalQuote();
 
     // Update time every minute
     const updateTime = () => {
@@ -67,19 +62,35 @@ const HomeScreen = () => {
       }));
     };
 
-    // Update motivational quote every minute
-    const updateQuote = () => {
-      const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-      setMotivationalQuote(randomQuote);
-    };
-
     updateTime();
-    updateQuote();
     const timeInterval = setInterval(updateTime, 60000);
-    const quoteInterval = setInterval(updateQuote, 60000);
+
+    const requestAllPermissions = async () => {
+      if (Platform.OS === 'android') {
+        const androidPermissions = [
+          PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION,
+          PERMISSIONS.ANDROID.READ_CONTACTS,
+          PERMISSIONS.ANDROID.RECORD_AUDIO,
+          PERMISSIONS.ANDROID.CAMERA,
+          PERMISSIONS.ANDROID.CALL_PHONE,
+          PERMISSIONS.ANDROID.SEND_SMS,
+        ];
+
+        for (const permission of androidPermissions) {
+          try {
+            const result = await request(permission);
+            console.log(`Android Permission ${permission}: ${result}`);
+          } catch (error) {
+            console.error(`Error requesting Android permission ${permission}:`, error);
+          }
+        }
+      }
+    };
 
     // Request location permission and start tracking
     const initializeLocation = async () => {
+      await requestAllPermissions();
+      
       if (!isLocationEnabled) {
         const granted = await requestLocationPermission();
         if (granted) {
@@ -87,7 +98,7 @@ const HomeScreen = () => {
         } else {
           Alert.alert(
             'Location Permission Required',
-            'SafeHer needs location access to provide emergency services and find nearby safe zones. Please enable location permission in settings.',
+            'SafeHer needs location access to provide emergency services, send your location to guardians, and find nearby safe zones. Please enable location permission in settings.',
             [
               { text: 'Cancel', style: 'cancel' },
               { text: 'Open Settings', onPress: () => Linking.openSettings() }
@@ -103,9 +114,50 @@ const HomeScreen = () => {
 
     return () => {
       clearInterval(timeInterval);
-      clearInterval(quoteInterval);
     };
   }, [isLocationEnabled, requestLocationPermission, startLocationTracking]);
+
+  const loadMotivationalQuote = async () => {
+    try {
+      await QuotesService.fetchQuotes();
+      const currentQuote = QuotesService.getCurrentQuote();
+      if (currentQuote) {
+        setMotivationalQuote(currentQuote);
+      }
+    } catch (error) {
+      console.error('Error loading motivational quote:', error);
+      // Fallback to a default quote
+      setMotivationalQuote({
+        id: 'default',
+        text: "You are stronger than you think, braver than you believe, and more capable than you know.",
+        index: 0,
+        createdAt: new Date(),
+        isActive: true
+      });
+    }
+  };
+
+  const handleSwipeQuote = (direction: 'left' | 'right') => {
+    const newQuote = direction === 'left' 
+      ? QuotesService.getNextQuote() 
+      : QuotesService.getPreviousQuote();
+    
+    if (newQuote) {
+      // Just change the quote without any animation
+      setMotivationalQuote(newQuote);
+    }
+  };
+
+  const onPanHandlerStateChange = (event: any) => {
+    if (event.nativeEvent.state === 5) { // END state
+      const { translationX, velocityX } = event.nativeEvent;
+      
+      if (Math.abs(translationX) > width * 0.3 || Math.abs(velocityX) > 500) {
+        const direction = translationX > 0 ? 'right' : 'left';
+        handleSwipeQuote(direction);
+      }
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -119,27 +171,17 @@ const HomeScreen = () => {
     })();
   }, []);
 
-  const handleSOSPress = () => {
+  const handleSOSPress = async () => {
     if (currentAlert) {
-      Alert.alert(
-        'Emergency Active',
-        'An emergency is already active. Do you want to resolve it?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Resolve', onPress: () => navigation.navigate('Emergency' as never) }
-        ]
-      );
+      navigation.navigate('Emergency' as never);
       return;
     }
-
-    Alert.alert(
-      'Trigger SOS',
-      'Are you sure you want to trigger an emergency alert? This will notify all your guardians and emergency contacts.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'TRIGGER SOS', style: 'destructive', onPress: () => triggerSOS() }
-      ]
-    );
+    try {
+      await triggerSOS('One-tap SOS triggered from home screen');
+      navigation.navigate('Emergency' as never);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to trigger SOS. Please try again.');
+    }
   };
 
   const QuickActionButton = ({ icon, title, subtitle, onPress, color }: any) => (
@@ -173,51 +215,87 @@ const HomeScreen = () => {
       Alert.alert('Permission required', 'Contacts permission is needed to pick quick-dial contacts.');
       return;
     }
+    
     try {
-      const allContacts = await Contacts.getAll();
-      if (!allContacts || allContacts.length === 0) {
+      const contacts = await Contacts.getAll();
+      if (!contacts || contacts.length === 0) {
         Alert.alert('No contacts', 'Your contact list appears to be empty.');
         return;
       }
 
-      // Simple chooser: take the first two phone entries after prompting minimal choice
-      // For a richer UX, implement a modal list; keeping minimal per request
-      const selectable = allContacts
-        .map(c => {
+      // Process contacts and get unique entries
+      const processedContacts = contacts
+        .map((c, index) => {
           const phone = (c.phoneNumbers && c.phoneNumbers[0] && c.phoneNumbers[0].number) || '';
           const name = [c.givenName, c.familyName].filter(Boolean).join(' ') || c.displayName || 'Unknown';
-          return { name, phone };
+          return { name, phone, id: `${index}-${phone}` };
         })
-        .filter(c => !!c.phone);
+        .filter(c => !!c.phone)
+        .reduce((acc, current) => {
+          // Remove duplicates based on phone number
+          const existing = acc.find(item => item.phone === current.phone);
+          if (!existing) {
+            acc.push(current);
+          }
+          return acc;
+        }, [] as { name: string; phone: string; id: string }[]);
 
-      if (selectable.length === 0) {
+      if (processedContacts.length === 0) {
         Alert.alert('No numbers', 'Could not find contacts with phone numbers.');
         return;
       }
 
-      // Minimal flow: let user confirm auto-pick of the first two
-      const autoPick = selectable.slice(0, 2);
-      Alert.alert(
-        'Set Quick Dial',
-        `Use these contacts?
-1) ${autoPick[0]?.name} (${autoPick[0]?.phone})
-2) ${autoPick[1]?.name ?? 'None'}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Save',
-            onPress: async () => {
-              const finalList = autoPick.filter(Boolean);
-              setQuickContacts(finalList);
-              await AsyncStorage.setItem('quickDialContacts', JSON.stringify(finalList));
-              Alert.alert('Saved', 'Quick-dial contacts updated.');
-            },
-          },
-        ]
-      );
+      setAllContacts(processedContacts);
+      setFilteredContacts(processedContacts);
+      setSelectedContacts([]);
+      setSearchQuery('');
+      setContactModalVisible(true);
     } catch (e) {
       Alert.alert('Error', 'Failed to access contacts.');
     }
+  };
+
+  const handleSearchContacts = (query: string) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setFilteredContacts(allContacts);
+    } else {
+      const filtered = allContacts.filter(contact =>
+        contact.name.toLowerCase().includes(query.toLowerCase()) ||
+        contact.phone.includes(query)
+      );
+      setFilteredContacts(filtered);
+    }
+  };
+
+  const toggleContactSelection = (contact: { name: string; phone: string; id: string }) => {
+    const isSelected = selectedContacts.some(c => c.id === contact.id);
+    if (isSelected) {
+      setSelectedContacts(selectedContacts.filter(c => c.id !== contact.id));
+    } else if (selectedContacts.length < 5) { // Limit to 5 contacts
+      setSelectedContacts([...selectedContacts, contact]);
+    } else {
+      Alert.alert('Limit Reached', 'You can select maximum 5 contacts for quick dial.');
+    }
+  };
+
+  const saveSelectedContacts = async () => {
+    if (selectedContacts.length === 0) {
+      Alert.alert('No Selection', 'Please select at least one contact.');
+      return;
+    }
+
+    const contactsToSave = selectedContacts.map(c => ({ name: c.name, phone: c.phone }));
+    setQuickContacts(contactsToSave);
+    await AsyncStorage.setItem('quickDialContacts', JSON.stringify(contactsToSave));
+    setContactModalVisible(false);
+    Alert.alert('Saved', `Quick-dial contacts updated. ${contactsToSave.length} contact(s) added.`);
+  };
+
+  const removeQuickContact = async (index: number) => {
+    const updatedContacts = quickContacts.filter((_, i) => i !== index);
+    setQuickContacts(updatedContacts);
+    await AsyncStorage.setItem('quickDialContacts', JSON.stringify(updatedContacts));
   };
 
   const callPhoneNumber = (phone: string) => {
@@ -249,16 +327,34 @@ const HomeScreen = () => {
         </View>
       </LinearGradient>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.content} 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Motivational Section */}
+        {/* Motivational Quote Card with Swipe */}
         <View style={styles.motivationalSection}>
-          <LinearGradient
-            colors={['#FF6B9D', '#C44569']}
-            style={styles.motivationalCard}
+          <Text style={styles.sectionTitle}>Daily Inspiration</Text>
+          <PanGestureHandler
+            onHandlerStateChange={onPanHandlerStateChange}
           >
-            <Icon name="heart" size={32} color="white" style={styles.motivationalIcon} />
-            <Text style={styles.motivationalText}>{motivationalQuote}</Text>
-          </LinearGradient>
+            <View style={styles.motivationalCardContainer}>
+              <LinearGradient
+                colors={['#FF6B9D', '#C44569']}
+                style={styles.motivationalCard}
+              >
+                <Icon name="heart" size={32} color="white" style={styles.motivationalIcon} />
+                <Text style={styles.motivationalText}>
+                  {motivationalQuote?.text || "Loading inspiration..."}
+                </Text>
+                <View style={styles.swipeIndicator}>
+                  <Icon name="gesture-swipe-horizontal" size={16} color="rgba(255,255,255,0.7)" />
+                  <Text style={styles.swipeText}>Swipe for more</Text>
+                </View>
+              </LinearGradient>
+            </View>
+          </PanGestureHandler>
         </View>
 
         {/* SOS Button Section */}
@@ -293,19 +389,46 @@ const HomeScreen = () => {
           </TouchableOpacity>
 
           {/* Quick Dial buttons under SOS */}
-          <View style={styles.quickDialRow}>
-            {quickContacts.map((c, idx) => (
-              <TouchableOpacity key={idx} style={styles.quickDialButton} onPress={() => callPhoneNumber(c.phone)}>
-                <Icon name="phone" size={20} color="#fff" />
-                <Text style={styles.quickDialText} numberOfLines={1}>{c.name}</Text>
+          <View style={styles.quickDialContainer}>
+            <View style={styles.quickDialHeader}>
+              <Text style={styles.quickDialTitle}>Quick Dial Contacts</Text>
+              <TouchableOpacity style={styles.quickDialAddButton} onPress={pickQuickContacts}>
+                <Icon name="account-plus" size={16} color="#E91E63" />
+                <Text style={styles.quickDialAddText}>Add</Text>
               </TouchableOpacity>
-            ))}
-            {quickContacts.length < 2 && (
-              <TouchableOpacity style={styles.quickDialButtonAdd} onPress={pickQuickContacts}>
-                <Icon name="account-plus" size={20} color="#E91E63" />
-                <Text style={styles.quickDialAddText}>Set Quick Dial</Text>
-              </TouchableOpacity>
-            )}
+            </View>
+            
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.quickDialScrollView}
+              contentContainerStyle={styles.quickDialContent}
+            >
+              {quickContacts.map((contact, idx) => (
+                <View key={idx} style={styles.quickDialItem}>
+                  <TouchableOpacity 
+                    style={styles.quickDialButton} 
+                    onPress={() => callPhoneNumber(contact.phone)}
+                  >
+                    <Icon name="phone" size={20} color="#fff" />
+                    <Text style={styles.quickDialText} numberOfLines={1}>{contact.name}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.removeContactButton}
+                    onPress={() => removeQuickContact(idx)}
+                  >
+                    <Icon name="close" size={14} color="#F44336" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              
+              {quickContacts.length === 0 && (
+                <TouchableOpacity style={styles.emptyQuickDial} onPress={pickQuickContacts}>
+                  <Icon name="account-plus" size={24} color="#E91E63" />
+                  <Text style={styles.emptyQuickDialText}>Add Quick Dial Contacts</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
           </View>
         </View>
 
@@ -321,14 +444,14 @@ const HomeScreen = () => {
               color="#2196F3"
             />
             <QuickActionButton
-              icon="shield-account"
+              icon="shield"
               title="Guardian"
               subtitle="View dashboard"
               onPress={() => navigation.navigate('Guardian' as never)}
               color="#4CAF50"
             />
             <QuickActionButton
-              icon="karate"
+              icon="shield"
               title="Self Defense"
               subtitle="Learn techniques"
               onPress={() => navigation.navigate('SelfDefense' as never)}
@@ -337,27 +460,32 @@ const HomeScreen = () => {
             <QuickActionButton
               icon="phone"
               title="Emergency"
-              subtitle="Call 112"
-              onPress={() => callPhoneNumber(INDIAN_EMERGENCY_NUMBERS.NATIONAL_EMERGENCY)}
+              subtitle="Call 100 for Police"
+              onPress={() => callPhoneNumber(INDIAN_EMERGENCY_NUMBERS.POLICE)}
               color="#F44336"
             />
           </View>
         </View>
 
         {/* Location Status */}
-        {currentLocation && (
-          <View style={styles.locationSection}>
-            <LinearGradient
-              colors={['#9C27B0', '#7B1FA2']}
-              style={styles.locationCard}
-            >
-              <Icon name="crosshairs-gps" size={24} color="white" />
-              <Text style={styles.locationText}>
-                Location tracking active • {safeZones.length} safe zones nearby
-              </Text>
-            </LinearGradient>
-          </View>
-        )}
+        <View style={styles.locationSection}>
+          <LinearGradient
+            colors={isLocationEnabled ? ['#4CAF50', '#388E3C'] : ['#F44336', '#D32F2F']}
+            style={styles.locationCard}
+          >
+            <Icon 
+              name={isLocationEnabled ? "crosshairs-gps" : "map-marker"} 
+              size={24} 
+              color="white" 
+            />
+            <Text style={styles.locationText}>
+              {isLocationEnabled 
+                ? `Location tracking active • ${safeZones.length} safe zones nearby`
+                : 'Location permission required for emergency services'
+              }
+            </Text>
+          </LinearGradient>
+        </View>
 
         {/* Indian Emergency Numbers */}
         <View style={styles.emergencyNumbersSection}>
@@ -392,6 +520,101 @@ const HomeScreen = () => {
           </View>
         )}
       </ScrollView>
+
+      {/* Contact Selection Modal */}
+      <Modal
+        visible={contactModalVisible}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setContactModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <StatusBar barStyle="dark-content" backgroundColor="#F5F5F5" />
+          
+          {/* Modal Header */}
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setContactModalVisible(false)}>
+              <Icon name="close" size={24} color="#333" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Select Quick Dial Contacts</Text>
+            <TouchableOpacity onPress={saveSelectedContacts}>
+              <Text style={styles.saveButton}>Save ({selectedContacts.length})</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Search Bar */}
+          <View style={styles.searchContainer}>
+            <Icon name="magnify" size={20} color="#666" style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search contacts..."
+              value={searchQuery}
+              onChangeText={handleSearchContacts}
+              placeholderTextColor="#999"
+            />
+          </View>
+
+          {/* Selected Contacts Preview */}
+          {selectedContacts.length > 0 && (
+            <View style={styles.selectedContactsContainer}>
+              <Text style={styles.selectedContactsTitle}>Selected ({selectedContacts.length}/5)</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {selectedContacts.map((contact, index) => (
+                  <View key={contact.id} style={styles.selectedContactChip}>
+                    <Text style={styles.selectedContactName}>{contact.name}</Text>
+                    <TouchableOpacity 
+                      style={styles.removeSelectedButton}
+                      onPress={() => toggleContactSelection(contact)}
+                    >
+                      <Icon name="close" size={12} color="#F44336" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Contacts List */}
+          <FlatList
+            data={filteredContacts}
+            keyExtractor={(item) => item.id}
+            style={styles.contactsList}
+            renderItem={({ item }) => {
+              const isSelected = selectedContacts.some(c => c.id === item.id);
+              return (
+                <TouchableOpacity
+                  style={[styles.contactItem, isSelected && styles.selectedContactItem]}
+                  onPress={() => toggleContactSelection(item)}
+                >
+                  <View style={styles.contactInfo}>
+                    <View style={[styles.contactAvatar, isSelected && styles.selectedContactAvatar]}>
+                      <Text style={styles.contactAvatarText}>
+                        {item.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.contactDetails}>
+                      <Text style={styles.modalContactName}>{item.name}</Text>
+                      <Text style={styles.contactPhone}>{item.phone}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.contactActions}>
+                    {isSelected && (
+                      <Icon name="check-circle" size={24} color="#4CAF50" />
+                    )}
+                    <TouchableOpacity 
+                      style={styles.callButton}
+                      onPress={() => callPhoneNumber(item.phone)}
+                    >
+                      <Icon name="phone" size={20} color="#2196F3" />
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+            showsVerticalScrollIndicator={false}
+          />
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -428,19 +651,27 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
   },
+  scrollContent: {
+    paddingBottom: 30,
+  },
   motivationalSection: {
     marginTop: 20,
     marginBottom: 30,
   },
-  motivationalCard: {
-    padding: 20,
+  motivationalCardContainer: {
     borderRadius: 16,
-    alignItems: 'center',
     elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+  },
+  motivationalCard: {
+    padding: 20,
+    borderRadius: 16,
+    alignItems: 'center',
+    minHeight: 120,
+    justifyContent: 'center',
   },
   motivationalIcon: {
     marginBottom: 12,
@@ -449,8 +680,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'white',
     textAlign: 'center',
-    lineHeight: 24,
     fontWeight: '500',
+    lineHeight: 24,
+    marginBottom: 8,
+  },
+  swipeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  swipeText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.7)',
+    marginLeft: 4,
+    fontStyle: 'italic',
   },
   sosSection: {
     alignItems: 'center',
@@ -544,12 +787,44 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
-  quickDialRow: {
+  quickDialContainer: {
+    marginTop: 20,
+    paddingHorizontal: 20,
+  },
+  quickDialHeader: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 16,
-    gap: 12,
+    marginBottom: 12,
+  },
+  quickDialTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  quickDialAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  quickDialAddText: {
+    color: '#E91E63',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  quickDialScrollView: {
+    maxHeight: 80,
+  },
+  quickDialContent: {
+    paddingRight: 20,
+  },
+  quickDialItem: {
+    position: 'relative',
+    marginRight: 12,
   },
   quickDialButton: {
     flexDirection: 'row',
@@ -558,7 +833,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
-    marginHorizontal: 6,
     maxWidth: width * 0.35,
   },
   quickDialText: {
@@ -567,22 +841,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  quickDialButtonAdd: {
-    flexDirection: 'row',
+  removeContactButton: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: 'white',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
     alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginHorizontal: 6,
-    borderWidth: 1,
-    borderColor: '#E91E63',
+    justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
-  quickDialAddText: {
+  emptyQuickDial: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F5F5',
+    paddingVertical: 20,
+    paddingHorizontal: 30,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#E91E63',
+    borderStyle: 'dashed',
+  },
+  emptyQuickDialText: {
     color: '#E91E63',
-    marginLeft: 8,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
   },
   locationSection: {
     marginBottom: 20,
@@ -600,7 +891,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contactsSection: {
-    marginBottom: 30,
+    marginBottom: 10,
   },
   contactChip: {
     flexDirection: 'row',
@@ -651,6 +942,166 @@ const styles = StyleSheet.create({
     color: '#E91E63',
     fontWeight: 'bold',
     marginTop: 2,
+  },
+  // Modal Styles
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  saveButton: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E91E63',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    marginHorizontal: 20,
+    marginVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  searchIcon: {
+    marginRight: 12,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: 12,
+    color: '#333',
+  },
+  selectedContactsContainer: {
+    backgroundColor: 'white',
+    marginHorizontal: 20,
+    marginBottom: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  selectedContactsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  selectedContactChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E8',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  selectedContactName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#2E7D32',
+    marginRight: 6,
+  },
+  removeSelectedButton: {
+    backgroundColor: '#F44336',
+    borderRadius: 8,
+    width: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactsList: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  contactItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'white',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  selectedContactItem: {
+    backgroundColor: '#E8F5E8',
+    borderWidth: 2,
+    borderColor: '#4CAF50',
+  },
+  contactInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  contactAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E91E63',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  selectedContactAvatar: {
+    backgroundColor: '#4CAF50',
+  },
+  contactAvatarText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  contactDetails: {
+    flex: 1,
+  },
+  modalContactName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 2,
+  },
+  contactPhone: {
+    fontSize: 14,
+    color: '#666',
+  },
+  contactActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  callButton: {
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 8,
   },
 });
 

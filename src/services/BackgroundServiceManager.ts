@@ -1,10 +1,9 @@
 import { Platform, NativeModules, NativeEventEmitter } from 'react-native';
 import BackgroundTimer from 'react-native-background-timer';
 import Geolocation from 'react-native-geolocation-service';
-import Voice from 'react-native-voice';
+import Voice from '@react-native-voice/voice';
 import Shake from 'react-native-shake';
 import { auth, firestore } from '../config/firebase';
-import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
 
 // Background Service Manager for SafeHer
 // Handles all background monitoring and emergency detection
@@ -16,9 +15,9 @@ export class BackgroundServiceManager {
   
   // Background timers and listeners
   private locationWatchId: number | null = null;
-  private geofenceCheckInterval: NodeJS.Timeout | null = null;
-  private voiceCheckInterval: NodeJS.Timeout | null = null;
-  private emergencyCheckInterval: NodeJS.Timeout | null = null;
+  private geofenceCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private voiceCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private emergencyCheckInterval: ReturnType<typeof setInterval> | null = null;
   
   // Shake and voice detection
   private shakeListener: any = null;
@@ -314,7 +313,6 @@ export class BackgroundServiceManager {
           distanceFilter: this.config.locationDistanceFilter,
           interval: this.config.locationUpdateInterval,
           fastestInterval: this.config.locationUpdateInterval / 2,
-          forceRequest: true,
           showLocationDialog: false,
         }
       );
@@ -367,21 +365,21 @@ export class BackgroundServiceManager {
   // Update location in Firebase
   private async updateLocationInFirebase(location: any): Promise<void> {
     try {
-      const user = auth.currentUser;
+      const user = auth().currentUser;
       if (!user) return;
 
-      const userRef = doc(firestore, 'users', user.uid);
-      await updateDoc(userRef, {
+      const userRef = firestore().collection('users').doc(user.uid);
+      await userRef.update({
         currentLocation: location,
-        lastLocationUpdate: new Date(),
+        lastLocationUpdate: firestore.FieldValue.serverTimestamp(),
         isOnline: true,
       });
 
       // Also update location history
-      const locationHistoryRef = collection(firestore, 'users', user.uid, 'locationHistory');
-      await addDoc(locationHistoryRef, {
+      const locationHistoryRef = firestore().collection('users').doc(user.uid).collection('locationHistory');
+      await locationHistoryRef.add({
         ...location,
-        timestamp: new Date(),
+        timestamp: firestore.FieldValue.serverTimestamp(),
       });
 
     } catch (error) {
@@ -723,11 +721,11 @@ export class BackgroundServiceManager {
   // Save emergency alert to Firebase
   private async saveEmergencyAlert(alert: any): Promise<void> {
     try {
-      const user = auth.currentUser;
+      const user = auth().currentUser;
       if (!user) return;
 
-      const alertRef = collection(firestore, 'emergencyAlerts');
-      await addDoc(alertRef, {
+      const alertRef = firestore().collection('emergencyAlerts');
+      await alertRef.add({
         userId: user.uid,
         ...alert,
         status: 'active',
@@ -753,7 +751,7 @@ export class BackgroundServiceManager {
   // Start emergency recording
   private async startEmergencyRecording(): Promise<void> {
     try {
-      // This would start audio/video recording
+      // This would start audio recording
       // For now, we'll implement a placeholder
       console.log('Starting emergency recording...');
     } catch (error) {

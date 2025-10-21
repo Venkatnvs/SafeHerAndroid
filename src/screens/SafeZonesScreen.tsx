@@ -78,6 +78,14 @@ const SafeZonesScreen = () => {
     });
   };
 
+  const shareLocation = (zone: any) => {
+    const message = `I'm at ${zone.name} (${zone.address}). My coordinates: ${zone.latitude}, ${zone.longitude}`;
+    const url = `sms:?body=${encodeURIComponent(message)}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Error', 'Could not open SMS. Please try again.');
+    });
+  };
+
   const SafeZoneCard = ({ zone, index }: any) => (
     <TouchableOpacity 
       style={styles.zoneCard}
@@ -110,6 +118,12 @@ const SafeZonesScreen = () => {
           onPress={() => openMaps(zone)}
         >
           <Icon name="directions" size={20} color="#2196F3" />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.shareButton}
+          onPress={() => shareLocation(zone)}
+        >
+          <Icon name="share" size={20} color="#4CAF50" />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -445,6 +459,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   directionsButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  shareButton: {
     padding: 8,
     marginLeft: 8,
   },

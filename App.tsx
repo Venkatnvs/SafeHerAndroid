@@ -10,6 +10,7 @@ import AuthNavigator from './src/components/AuthNavigator';
 import { AuthProvider } from './src/context/AuthContext';
 import { LocationProvider } from './src/context/LocationContext';
 import { EmergencyProvider } from './src/context/EmergencyContext';
+import { SettingsProvider } from './src/context/SettingsContext';
 import { navigationRef } from './src/utils/NavigationService';
 
 async function requestNotificationPermission() {
@@ -28,15 +29,17 @@ function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#E91E63" />
-      <AuthProvider>
-        <LocationProvider>
-          <EmergencyProvider>
-            <NavigationContainer ref={navigationRef}>
-              <AuthNavigator />
-            </NavigationContainer>
-          </EmergencyProvider>
-        </LocationProvider>
-      </AuthProvider>
+      <SettingsProvider>
+        <AuthProvider>
+          <LocationProvider>
+            <EmergencyProvider>
+              <NavigationContainer ref={navigationRef}>
+                <AuthNavigator />
+              </NavigationContainer>
+            </EmergencyProvider>
+          </LocationProvider>
+        </AuthProvider>
+      </SettingsProvider>
     </SafeAreaProvider>
   );
 }

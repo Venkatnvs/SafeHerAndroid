@@ -101,7 +101,7 @@ const OnboardingScreen = () => {
         colors={item.color}
         style={styles.iconContainer}
       >
-        {item.showLogo ? (
+        {item.showLogo && index === 0 ? (
           <View style={styles.logoContainer}>
             <View style={styles.shieldContainer}>
               <Icon name="shield" size={80} color="white" />

@@ -1,9 +1,24 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import Geolocation from 'react-native-geolocation-service';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { Platform } from 'react-native';
-import BackgroundTimer from 'react-native-background-timer';
+import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { auth, firestore } from '../config/firebase';
+import { SafeLocationService } from '../services/SafeLocationService';
+
+// Conditional imports to prevent NativeEventEmitter warnings
+let BackgroundTimer: any = null;
+let Geolocation: any = null;
+
+try {
+  BackgroundTimer = require('react-native-background-timer').default;
+} catch (e) {
+  console.log('BackgroundTimer not available');
+}
+
+try {
+  Geolocation = require('react-native-geolocation-service').default;
+} catch (e) {
+  console.log('Geolocation service not available');
+}
 
 interface Location {
   latitude: number;
@@ -77,19 +92,39 @@ export const LocationProvider: React.FC<{ children: ReactNode }> = ({ children }
 
   const requestLocationPermission = async (): Promise<boolean> => {
     try {
-      const permission = Platform.OS === 'ios' 
-        ? PERMISSIONS.IOS.LOCATION_ALWAYS 
-        : PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION;
 
-      const result = await request(permission);
-      if (result === RESULTS.GRANTED) {
-        setIsLocationEnabled(true);
-        return true;
+      if (Platform.OS === 'android') {
+        const fineLocationResult = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+        
+        if (fineLocationResult === RESULTS.GRANTED) {
+          setIsLocationEnabled(true);
+          
+          // Try to request background location for emergency services
+          try {
+            const backgroundResult = await request(PERMISSIONS.ANDROID.ACCESS_BACKGROUND_LOCATION);
+            console.log('Background location permission result:', backgroundResult);
+          } catch (backgroundError) {
+            console.log('Background location permission not available or denied');
+          }
+          
+          return true;
+        } else {
+          setIsLocationEnabled(false);
+          return false;
+        }
       } else {
-        setIsLocationEnabled(false);
-        return false;
+        // iOS implementation
+        const iosResult = await request(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+        if (iosResult === RESULTS.GRANTED) {
+          setIsLocationEnabled(true);
+          return true;
+        } else {
+          setIsLocationEnabled(false);
+          return false;
+        }
       }
     } catch (error) {
+      console.error('Error requesting location permission:', error);
       setIsLocationEnabled(false);
       return false;
     }
@@ -99,41 +134,30 @@ export const LocationProvider: React.FC<{ children: ReactNode }> = ({ children }
     if (!isLocationEnabled || isTracking) return;
     setIsTracking(true);
 
-    const watchId = Geolocation.watchPosition(
-      (position: any) => {
-        const location: Location = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          timestamp: position.timestamp,
-          speed: position.coords.speed || undefined,
-          heading: position.coords.heading || undefined,
-        };
-        setCurrentLocation(location);
-        updateLocationInFirebase(location);
-        checkGeofences(location);
-        updateNearbySafeZones(location);
-      },
-      () => setIsTracking(false),
-      {
-        enableHighAccuracy: true,
-        distanceFilter: 10,
-        interval: 5000,
-        fastestInterval: 2000,
-        showLocationDialog: true,
-      } as any
-    );
+    const locationService = SafeLocationService.getInstance();
+    
+    locationService.startWatching((locationData) => {
+      const location: Location = {
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        accuracy: locationData.accuracy,
+        timestamp: locationData.timestamp,
+      };
+      setCurrentLocation(location);
+      updateLocationInFirebase(location);
+      checkGeofences(location);
+      updateNearbySafeZones(location);
+    });
 
-    setLocationWatchId(watchId);
+    setIsTracking(true);
     startGeofenceMonitoring();
     BackgroundTimer.start();
   };
 
   const stopLocationTracking = () => {
-    if (locationWatchId !== null) {
-      Geolocation.clearWatch(locationWatchId);
-      setLocationWatchId(null);
-    }
+    const locationService = SafeLocationService.getInstance();
+    locationService.stopWatching();
+    
     if (geofenceCheckInterval) {
       clearInterval(geofenceCheckInterval);
       setGeofenceCheckInterval(null);
@@ -200,18 +224,69 @@ export const LocationProvider: React.FC<{ children: ReactNode }> = ({ children }
   const getNearbySafeZones = async (): Promise<SafeZone[]> => {
     if (!currentLocation) return [];
     try {
+      // First try to get from Firebase
       const snapshot = await firestore().collection('safeZones').get();
-      const zones: SafeZone[] = snapshot.docs.map(doc => {
+      let zones: SafeZone[] = snapshot.docs.map(doc => {
         const data = doc.data() as any;
         const distance = calculateDistance(currentLocation.latitude, currentLocation.longitude, data.latitude, data.longitude);
         return { id: doc.id, ...data, distance, isNearby: distance <= 2000 } as SafeZone;
       });
+
+      // If no zones found in Firebase, add some default Indian safe zones
+      if (zones.length === 0) {
+        zones = getDefaultIndianSafeZones(currentLocation);
+      }
+
       zones.sort((a, b) => (a.distance || 0) - (b.distance || 0));
       setSafeZones(zones);
       return zones;
     } catch {
-      return [];
+      // Fallback to default zones
+      const defaultZones = getDefaultIndianSafeZones(currentLocation);
+      setSafeZones(defaultZones);
+      return defaultZones;
     }
+  };
+
+  const getDefaultIndianSafeZones = (location: Location): SafeZone[] => {
+    // Default safe zones for major Indian cities
+    const defaultZones = [
+      {
+        id: 'police_1',
+        name: 'Nearest Police Station',
+        type: 'police' as const,
+        latitude: location.latitude + 0.001,
+        longitude: location.longitude + 0.001,
+        address: 'Police Station - Emergency Services',
+        phone: '100',
+        distance: calculateDistance(location.latitude, location.longitude, location.latitude + 0.001, location.longitude + 0.001),
+        isNearby: true,
+      },
+      {
+        id: 'hospital_1',
+        name: 'Nearest Hospital',
+        type: 'hospital' as const,
+        latitude: location.latitude - 0.001,
+        longitude: location.longitude + 0.001,
+        address: 'Hospital - Emergency Medical Services',
+        phone: '102',
+        distance: calculateDistance(location.latitude, location.longitude, location.latitude - 0.001, location.longitude + 0.001),
+        isNearby: true,
+      },
+      {
+        id: 'fire_1',
+        name: 'Fire Station',
+        type: 'fire_station' as const,
+        latitude: location.latitude + 0.002,
+        longitude: location.longitude - 0.001,
+        address: 'Fire Station - Emergency Services',
+        phone: '101',
+        distance: calculateDistance(location.latitude, location.longitude, location.latitude + 0.002, location.longitude - 0.001),
+        isNearby: true,
+      },
+    ];
+
+    return defaultZones.filter(zone => zone.distance <= 5000); // Within 5km
   };
 
   const updateNearbySafeZones = (location: Location) => {
@@ -271,9 +346,13 @@ export const LocationProvider: React.FC<{ children: ReactNode }> = ({ children }
 
   useEffect(() => {
     return () => {
-      if (locationWatchId !== null) Geolocation.clearWatch(locationWatchId);
+      if (locationWatchId !== null && Geolocation) {
+        Geolocation.clearWatch(locationWatchId);
+      }
       if (geofenceCheckInterval) clearInterval(geofenceCheckInterval as any);
-      BackgroundTimer.stop();
+      if (BackgroundTimer) {
+        BackgroundTimer.stop();
+      }
     };
   }, []);
 

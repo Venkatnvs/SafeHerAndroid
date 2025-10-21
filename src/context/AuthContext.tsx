@@ -105,9 +105,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const updateProfile = async (data: Partial<User>) => {
     if (!user) throw new Error('No user logged in');
 
-    const updatedUser = { ...user, ...data };
-    await firestore().collection('users').doc(user.uid).update(data);
-    setUser(updatedUser);
+    try {
+      if (data.displayName) {
+        await auth().currentUser?.updateProfile({
+          displayName: data.displayName,
+        });
+      }
+
+      // Update Firestore document
+      await firestore().collection('users').doc(user.uid).update(data);
+      
+      // Update local state
+      const updatedUser = { ...user, ...data };
+      setUser(updatedUser);
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      throw error;
+    }
   };
 
   const addGuardian = async (email: string) => {

@@ -1,0 +1,12 @@
+{
+  "name": "safeher-quotes-script",
+  "version": "1.0.0",
+  "description": "Script to populate motivational quotes in Firebase",
+  "main": "populateQuotes.js",
+  "scripts": {
+    "populate-quotes": "node populateQuotes.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

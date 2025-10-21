@@ -13,6 +13,7 @@ import SafeZonesScreen from '../screens/SafeZonesScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SelfDefenseScreen from '../screens/SelfDefenseScreen';
 import EmergencyScreen from '../screens/EmergencyScreen';
+import CommunityScreen from '../screens/CommunityScreen';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -48,8 +49,11 @@ function TabNavigator() {
             case 'SelfDefense':
               iconName = focused ? 'karate' : 'karate';
               break;
+            case 'Community':
+              iconName = focused ? 'account-group' : 'account-group-outline';
+              break;
             case 'Profile':
-              iconName = focused ? 'account' : 'account-outline';
+              iconName = focused ? 'account-cog' : 'account-cog-outline';
               break;
             default:
               iconName = 'circle';
@@ -91,9 +95,14 @@ function TabNavigator() {
         options={{ title: 'Self Defense' }}
       />
       <Tab.Screen 
+        name="Community" 
+        component={CommunityScreen}
+        options={{ title: 'Community' }}
+      />
+      <Tab.Screen 
         name="Profile" 
         component={ProfileScreen}
-        options={{ title: 'Profile' }}
+        options={{ title: 'Profile & Settings' }}
       />
     </Tab.Navigator>
   );

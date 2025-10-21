@@ -8,6 +8,7 @@ import {
   Alert,
   StatusBar,
   Dimensions,
+  Linking,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -25,6 +26,7 @@ const EmergencyScreen = () => {
   const [isResolving, setIsResolving] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(3);
   const [autoActionsStarted, setAutoActionsStarted] = useState(false);
+  const [showCancelOption, setShowCancelOption] = useState(true);
 
   const handleResolveEmergency = async () => {
     Alert.alert(
@@ -53,14 +55,16 @@ const EmergencyScreen = () => {
   };
 
   const handleCallEmergency = () => {
+    const emergencyNumber = '100';
+    const serviceName = 'Police';
+    
     Alert.alert(
       'Call Emergency Services',
-      'This will dial 112 immediately. Continue?',
+      `This will dial ${emergencyNumber} (${serviceName}) immediately. Continue?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Call 112', onPress: () => {
-          // Implementation for calling emergency services
-          Alert.alert('Calling 112', 'Emergency services are being contacted...');
+        { text: `Call ${emergencyNumber}`, onPress: () => {
+          Linking.openURL(`tel:${emergencyNumber}`);
         }}
       ]
     );
@@ -88,8 +92,9 @@ const EmergencyScreen = () => {
           if (prev <= 1) {
             if (!autoActionsStarted) {
               setAutoActionsStarted(true);
-              // Auto-start: call emergency number. Replace with desired flow (contacts/guardians)
-              handleCallEmergency();
+              const emergencyNumber = '100';
+              Linking.openURL(`tel:${emergencyNumber}`);
+              // Send additional notifications
               notifyQuickContactsSMS('Emergency active. Please help or call me back.');
             }
             return null;
@@ -129,6 +134,32 @@ const EmergencyScreen = () => {
         <View style={styles.countdownOverlay}>
           <Text style={styles.countdownText}>{countdown}</Text>
           <Text style={styles.countdownSubtext}>Preparing to start emergency actions…</Text>
+          {showCancelOption && (
+            <TouchableOpacity 
+              style={styles.cancelButton}
+              onPress={() => {
+                Alert.alert(
+                  'Cancel Emergency',
+                  'Are you sure you want to cancel this emergency? This will stop all alerts.',
+                  [
+                    { text: 'Continue Emergency', style: 'cancel' },
+                    { 
+                      text: 'Cancel Emergency', 
+                      style: 'destructive',
+                      onPress: async () => {
+                        if (currentAlert) {
+                          await resolveEmergency(currentAlert.id, 'Cancelled by user');
+                          navigation.goBack();
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Text style={styles.cancelButtonText}>Cancel Emergency</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       
@@ -194,7 +225,9 @@ const EmergencyScreen = () => {
               style={styles.actionButtonGradient}
             >
               <Icon name="phone" size={32} color="white" />
-              <Text style={styles.actionButtonText}>Call Emergency Services (112)</Text>
+              <Text style={styles.actionButtonText}>
+                Call Emergency Services (100)
+              </Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -233,11 +266,6 @@ const EmergencyScreen = () => {
             <View style={styles.recordingItem}>
               <Icon name="microphone" size={24} color="#4CAF50" />
               <Text style={styles.recordingText}>Audio Recording: Active</Text>
-            </View>
-            
-            <View style={styles.recordingItem}>
-              <Icon name="video" size={24} color="#4CAF50" />
-              <Text style={styles.recordingText}>Video Recording: Active</Text>
             </View>
             
             <Text style={styles.recordingNote}>
@@ -372,6 +400,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'rgba(255,255,255,0.95)',
     marginTop: 8,
+  },
+  cancelButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 32,
+    paddingVertical: 16,
+    borderRadius: 24,
+    marginTop: 24,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  cancelButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   content: {
     flex: 1,

@@ -43,6 +43,13 @@ const GuardianDashboardScreen = () => {
 
   useEffect(() => {
     loadProtectedUsers();
+    
+    // Set up real-time monitoring
+    const interval = setInterval(() => {
+      loadProtectedUsers();
+    }, 30000); // Update every 30 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   const loadProtectedUsers = async () => {
@@ -191,6 +198,14 @@ const GuardianDashboardScreen = () => {
     }
   };
 
+  const sendMessageToUser = (phoneNumber: string, userName: string) => {
+    const message = `Hi ${userName}, I'm checking on you. Are you safe? Please reply if you need any help.`;
+    const url = `sms:${phoneNumber}?body=${encodeURIComponent(message)}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Error', 'Could not open SMS. Please try again.');
+    });
+  };
+
   const formatLastSeen = (lastSeen: Date) => {
     const now = new Date();
     const diffInMinutes = Math.floor((now.getTime() - lastSeen.getTime()) / (1000 * 60));
@@ -222,6 +237,12 @@ const GuardianDashboardScreen = () => {
           onPress={() => callUser(user.phoneNumber)}
         >
           <Icon name="phone" size={20} color="#4CAF50" />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.messageButton}
+          onPress={() => sendMessageToUser(user.phoneNumber, user.name)}
+        >
+          <Icon name="message" size={20} color="#2196F3" />
         </TouchableOpacity>
         <TouchableOpacity 
           style={styles.removeButton}
@@ -548,6 +569,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   callButton: {
+    padding: 8,
+    marginRight: 8,
+  },
+  messageButton: {
     padding: 8,
     marginRight: 8,
   },
