@@ -127,11 +127,13 @@ const SelfDefenseScreen = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [videoLoading, setVideoLoading] = useState(false);
+  const [videoErrorMessage, setVideoErrorMessage] = useState('');
   const [cachedTopics, setCachedTopics] = useState<SelfDefenseTopic[]>([]);
   const [cacheTimestamp, setCacheTimestamp] = useState<number>(0);
   const [errors, setErrors] = useState<{[key: string]: string}>({});
   
   const screenWidth = Dimensions.get('window').width;
+  const screenHeight = Dimensions.get('window').height;
   const playerRef = useRef<any>(null);
 
   // Optimized safe icon component
@@ -268,11 +270,19 @@ const SelfDefenseScreen = () => {
       return;
     }
     
-    console.log('Opening video player with ID:', youtubeId);
-    setCurrentVideoId(youtubeId);
+    // Clean and validate YouTube ID
+    const cleanId = youtubeId.trim();
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
+      Alert.alert('Error', 'Invalid YouTube video ID format. Must be 11 characters.');
+      return;
+    }
+    
+    console.log('Opening video player with ID:', cleanId);
+    console.log('YouTube URL would be:', `https://www.youtube.com/watch?v=${cleanId}`);
+    setCurrentVideoId(cleanId);
     setVideoPlayerVisible(true);
-    setVideoLoading(true);
     setVideoError(false);
+    setVideoErrorMessage('');
     setIsPlaying(false);
   }, []);
 
@@ -309,6 +319,7 @@ const SelfDefenseScreen = () => {
     setCurrentVideoId('');
     setIsPlaying(false);
     setVideoError(false);
+    setVideoErrorMessage('');
     setVideoLoading(false);
   }, []);
 
@@ -339,22 +350,7 @@ const SelfDefenseScreen = () => {
     loadTopics();
   }, [checkAdminStatus, loadTopics]);
 
-  // Handle video loading timeout
-  useEffect(() => {
-    if (videoLoading && currentVideoId) {
-      const timeout = setTimeout(() => {
-        console.log('Video loading timeout after 10 seconds, auto-opening in YouTube');
-        setVideoError(true);
-        setVideoLoading(false);
-        // Auto-open in YouTube as fallback
-        setTimeout(() => {
-          tryYouTubeFallback(currentVideoId);
-        }, 1000); // Small delay to show error state first
-      }, 10000); // 10 second timeout
-
-      return () => clearTimeout(timeout);
-    }
-  }, [videoLoading, currentVideoId, tryYouTubeFallback]);
+  // Removed video loading timeout - simplified loading state management
 
   // Form validation
   const validateForm = useCallback((data: FormData) => {
@@ -749,11 +745,14 @@ const SelfDefenseScreen = () => {
                 <SafeIcon name="alert-circle" size={48} color="#F44336" />
                 <Text style={styles.videoErrorText}>Failed to load video</Text>
                 <Text style={styles.videoErrorSubtext}>Video ID: {currentVideoId}</Text>
+                {videoErrorMessage ? (
+                  <Text style={styles.videoErrorSubtext}>Error: {videoErrorMessage}</Text>
+                ) : null}
                 <TouchableOpacity
                   style={styles.retryButton}
                   onPress={() => {
                     setVideoError(false);
-                    setVideoLoading(true);
+                    setVideoErrorMessage('');
                   }}
                 >
                   <Text style={styles.retryButtonText}>Retry</Text>
@@ -764,85 +763,95 @@ const SelfDefenseScreen = () => {
                 >
                   <Text style={styles.retryButtonText}>Open in YouTube App</Text>
                 </TouchableOpacity>
-              </View>
-            ) : videoLoading ? (
-              <View style={styles.videoErrorContainer}>
-                <ActivityIndicator size="large" color="#FF9800" />
-                <Text style={styles.videoErrorText}>Loading video...</Text>
-                <Text style={styles.videoErrorSubtext}>Video ID: {currentVideoId}</Text>
-                <Text style={styles.videoErrorSubtext}>Will auto-open in YouTube after 10 seconds</Text>
                 <TouchableOpacity
-                  style={[styles.retryButton, {backgroundColor: '#2196F3', marginTop: 10}]}
+                  style={[styles.retryButton, {backgroundColor: '#4CAF50', marginTop: 10}]}
                   onPress={() => {
-                    setVideoLoading(false);
-                    setVideoPlayerVisible(false);
-                    tryYouTubeFallback(currentVideoId);
+                    // Test with a known working video ID
+                    const testVideoId = 'dQw4w9WgXcQ'; // Rick Roll - known to work
+                    console.log('Testing with video ID:', testVideoId);
+                    setCurrentVideoId(testVideoId);
+                    setVideoError(false);
+                    setVideoErrorMessage('');
                   }}
                 >
-                  <Text style={styles.retryButtonText}>Cancel & Open in YouTube</Text>
+                  <Text style={styles.retryButtonText}>Test with Sample Video</Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              <YoutubePlayer
-                ref={playerRef}
-                height={Math.min(screenWidth * 0.6, 250)}
-                play={isPlaying}
-                videoId={currentVideoId}
-                webViewStyle={{ 
-                  opacity: 0.99,
-                  backgroundColor: '#000'
-                }}
-                webViewProps={{
-                  allowsInlineMediaPlayback: true,
-                  mediaPlaybackRequiresUserAction: false,
-                  allowsFullscreenVideo: true,
-                  source: {
-                    uri: `https://www.youtube.com/embed/${currentVideoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&rel=0&modestbranding=1`
-                  }
-                }}
-                onChangeState={(event) => {
-                  console.log('Video state changed:', event);
-                  if (event === 'ended') {
+              <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+                <YoutubePlayer
+                  ref={playerRef}
+                  height={Math.min(screenHeight * 0.8, 250)}
+                  width={screenWidth}
+                  play={isPlaying}
+                  videoId={currentVideoId}
+                  webViewStyle={{ 
+                    opacity: 0.99,
+                    backgroundColor: '#000'
+                  }}
+                  webViewProps={{
+                    allowsInlineMediaPlayback: true,
+                    mediaPlaybackRequiresUserAction: false,
+                    allowsFullscreenVideo: true,
+                    startInLoadingState: true,
+                    scalesPageToFit: true,
+                    mixedContentMode: 'compatibility',
+                    domStorageEnabled: true,
+                    javaScriptEnabled: true,
+                    userAgent: 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+                  }}
+                  onChangeState={(event) => {
+                    console.log('Video state changed:', event, 'Current isPlaying:', isPlaying);
+                    if (event === 'ended') {
+                      console.log('Video ended, setting isPlaying to false');
+                      setIsPlaying(false);
+                    } else if (event === 'playing') {
+                      console.log('Video playing, setting isPlaying to true');
+                      setIsPlaying(true);
+                      setVideoError(false);
+                    } else if (event === 'paused') {
+                      console.log('Video paused, setting isPlaying to false');
+                      setIsPlaying(false);
+                    } else if (event === 'buffering') {
+                      console.log('Video buffering, keeping current state:', isPlaying);
+                      // Keep current playing state during buffering
+                    } else if (event === 'unstarted') {
+                      console.log('Video unstarted, setting isPlaying to false');
+                      setIsPlaying(false);
+                    }
+                  }}
+                  onError={(error) => {
+                    const errorMsg = `Error loading video: ${String(error)}`;
+                    console.error('Video error details:', {
+                      error,
+                      videoId: currentVideoId,
+                      errorType: typeof error,
+                      errorString: String(error),
+                      timestamp: new Date().toISOString()
+                    });
+                    setVideoErrorMessage(errorMsg);
+                    setVideoError(true);
                     setIsPlaying(false);
-                  } else if (event === 'playing') {
-                    setVideoLoading(false);
+                  }}
+                  onReady={() => {
+                    console.log('Video ready, initializing state');
                     setVideoError(false);
-                  } else if (event === 'paused') {
-                    setVideoLoading(false);
-                  }
-                }}
-                onError={(error) => {
-                  console.error('Video error:', error);
-                  setVideoError(true);
-                  setVideoLoading(false);
-                  setIsPlaying(false);
-                }}
-                onReady={() => {
-                  console.log('Video ready');
-                  setVideoError(false);
-                  setVideoLoading(false);
-                }}
-                initialPlayerParams={{
-                  controls: true,
-                  rel: false,
-                }}
-              />
+                    // Initialize playing state - start paused by default
+                    setIsPlaying(false);
+                    console.log('Video initialized with isPlaying:', false);
+                  }}
+                  initialPlayerParams={{
+                    controls: true,
+                    rel: false,
+                  }}
+                />
+              </View>
             )}
           </View>
           
           <View style={styles.videoPlayerActions}>
             <TouchableOpacity
-              style={styles.videoControlButton}
-              onPress={() => setIsPlaying(!isPlaying)}
-            >
-              <SafeIcon name={isPlaying ? "pause" : "play"} size={20} color="white" />
-              <Text style={styles.videoActionButtonText}>
-                {isPlaying ? "Pause" : "Play"}
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.videoActionButton}
+              style={[styles.videoActionButton, { flex: 1 }]}
               onPress={() => tryYouTubeFallback(currentVideoId)}
             >
               <SafeIcon name="youtube" size={20} color="white" />

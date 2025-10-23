@@ -14,6 +14,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useLocation } from '../context/LocationContext';
 import { INDIAN_EMERGENCY_NUMBERS } from '../constants/IndianEmergencyNumbers';
+import { GOOGLE_PLACES_CONFIG } from '../config/googlePlaces';
 
 const SafeZonesScreen = () => {
   const { 
@@ -98,11 +99,16 @@ const SafeZonesScreen = () => {
         <Text style={styles.zoneName}>{zone.name}</Text>
         <Text style={styles.zoneAddress}>{zone.address}</Text>
         <Text style={styles.zoneDistance}>
-          {zone.distance ? `${(zone.distance / 1000).toFixed(1)} km away` : 'Distance calculating...'}
+          {zone.distance ? `${formatDistance(zone.distance)} away` : 'Distance calculating...'}
         </Text>
         {zone.phone && (
           <Text style={styles.zonePhone}>📞 {zone.phone}</Text>
         )}
+        <Text style={styles.zoneType}>
+          {getZoneTypeLabel(zone.type)} • {zone.isNearby ? 'Nearby' : 'Available'}
+          {zone.rating && ` • ⭐ ${zone.rating.toFixed(1)}`}
+          {zone.isOpen !== undefined && ` • ${zone.isOpen ? 'Open' : 'Closed'}`}
+        </Text>
       </View>
       <View style={styles.zoneActions}>
         {zone.phone && (
@@ -134,8 +140,10 @@ const SafeZonesScreen = () => {
       case 'police': return 'police-badge';
       case 'hospital': return 'hospital-building';
       case 'school': return 'school';
-      case 'pharmacy': return 'pharmacy';
-      case 'bus_station': return 'bus';
+      case 'fire_station': return 'fire-truck';
+      case 'gas_station': return 'gas-station';
+      case 'shopping_mall': return 'shopping';
+      case 'post_office': return 'post-office';
       default: return 'map-marker';
     }
   };
@@ -145,9 +153,32 @@ const SafeZonesScreen = () => {
       case 'police': return '#2196F3';
       case 'hospital': return '#F44336';
       case 'school': return '#4CAF50';
-      case 'pharmacy': return '#FF9800';
-      case 'bus_station': return '#9C27B0';
+      case 'fire_station': return '#FF5722';
+      case 'gas_station': return '#FF9800';
+      case 'shopping_mall': return '#9C27B0';
+      case 'post_office': return '#607D8B';
       default: return '#607D8B';
+    }
+  };
+
+  const formatDistance = (distance: number): string => {
+    if (distance < 1000) {
+      return `${distance}m`;
+    } else {
+      return `${(distance / 1000).toFixed(1)}km`;
+    }
+  };
+
+  const getZoneTypeLabel = (type: string): string => {
+    switch (type) {
+      case 'police': return 'Police Station';
+      case 'hospital': return 'Hospital';
+      case 'school': return 'School';
+      case 'fire_station': return 'Fire Station';
+      case 'gas_station': return 'Gas Station';
+      case 'shopping_mall': return 'Shopping Mall';
+      case 'post_office': return 'Post Office';
+      default: return 'Emergency Service';
     }
   };
 
@@ -198,9 +229,9 @@ const SafeZonesScreen = () => {
         {currentLocation && (
           <>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Nearby Emergency Services</Text>
+              <Text style={styles.sectionTitle}>Emergency Services</Text>
               <Text style={styles.sectionSubtitle}>
-                {safeZones.length} service(s) found within 5km
+                {safeZones.length} service(s) found within {GOOGLE_PLACES_CONFIG.DEFAULT_RADIUS / 1000}km
               </Text>
             </View>
 
@@ -453,6 +484,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#4CAF50',
     marginTop: 2,
+  },
+  zoneType: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 2,
+    fontWeight: '500',
   },
   zoneActions: {
     flexDirection: 'row',

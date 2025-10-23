@@ -2,6 +2,7 @@ package com.safeherandroid
 
 import android.app.Application
 import com.facebook.react.PackageList
+import com.safeherandroid.sms.SmsSenderPackage
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
 import com.facebook.react.ReactNativeHost
@@ -17,8 +18,8 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              // add(MyReactNativePackage())
+              // Manually add our custom SMS sender package
+              add(SmsSenderPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

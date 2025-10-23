@@ -5,9 +5,11 @@ import { navigate } from '../utils/NavigationService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { INDIAN_EMERGENCY_MESSAGES } from '../constants/IndianEmergencyNumbers';
 import { SafeLocationService } from '../services/SafeLocationService';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { request, check, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { FileUtils } from '../utils/FileUtils';
 import { useSettings } from './SettingsContext';
+import { SOSService } from '../services/SOSService';
+import { SOS_CONFIG, formatSOSMessage, getActiveContacts } from '../config/sosConfig';
 
 // Conditional imports to prevent NativeEventEmitter warnings
 let BackgroundTimer: any = null;
@@ -99,6 +101,10 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [isListening, setIsListening] = useState(false);
   const [isShakeEnabled, setIsShakeEnabled] = useState(false);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  
+  // Initialize SOS Service
+  const sosService = SOSService.getInstance();
+  sosService.setConfig(SOS_CONFIG);
 
   const [audioRecorder, setAudioRecorder] = useState<any>(null);
   const [recordingPath, setRecordingPath] = useState<string>('');
@@ -185,6 +191,8 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     const user = auth().currentUser;
     if (!user) return;
     
+    console.log('🚨 SOS TRIGGERED - Starting emergency response sequence');
+    
     // Get current location with better error handling using SafeLocationService
     let location = { latitude: 0, longitude: 0, accuracy: 0 };
     try {
@@ -204,6 +212,7 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
         }
       }
+      console.log('📍 Location obtained:', location);
     } catch (error) {
       console.log('SafeLocationService error, trying Firebase location:', error);
       try {
@@ -228,25 +237,91 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       message: message || 'SOS triggered manually',
       guardianResponses: [],
     };
-    const docRef = await firestore().collection('emergencyAlerts').add(alert);
-    setCurrentAlert({ ...alert, id: docRef.id });
     
-    // Only start recording if auto-record is enabled
-    if (recordingSettings.autoRecordOnEmergency) {
-      await startAudioRecording();
-    }
-    
-    Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-    
-    // Navigate to Emergency screen
-    try { 
-      navigate('Emergency'); 
+    try {
+      const docRef = await firestore().collection('emergencyAlerts').add(alert);
+      setCurrentAlert({ ...alert, id: docRef.id });
+      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+      
+      // Skip audio recording entirely to avoid permission issues
+      console.log('Audio recording disabled to prevent permission crashes');
+      
+      // Trigger immediate SOS actions
+      await performSOSActions(location, message || 'SOS triggered manually');
+      
+      Vibration.vibrate([0, 500, 200, 500, 200, 500]);
+      
+      // Navigate to Emergency screen
+      try { 
+        navigate('Emergency'); 
+      } catch (error) {
+        console.log('Navigation error:', error);
+      }
+      
     } catch (error) {
-      console.log('Navigation error:', error);
+      console.error('Error creating emergency alert:', error);
+      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
     }
-    
-    // Send enhanced SMS with location
-    await sendEmergencySMSWithLocation(location, message || 'SOS triggered manually');
+  };
+
+  // New function to perform SOS actions using the SOS service
+  const performSOSActions = async (location: any, message: string) => {
+    try {
+      console.log('🚨 Performing SOS actions...');
+      
+      // Get active contacts based on configuration
+      const contacts = getActiveContacts(SOS_CONFIG);
+      console.log(`📞 Found ${contacts.length} contacts to notify: ${contacts.map(contact => contact.name).join(', ')}`);
+
+      // Format the SOS message with location and timestamp
+      const sosMessage = formatSOSMessage(SOS_CONFIG, location, new Date());
+      console.log('📝 SOS Message:', sosMessage);
+
+      // Send SMS if enabled
+      if (SOS_CONFIG.SMS_CONFIG.enabled) {
+        console.log('📱 Sending emergency SMS...');
+        const smsContacts = contacts.filter(contact => 
+          SOS_CONFIG.SMS_CONFIG.sendToPrimary && contact.isPrimary ||
+          SOS_CONFIG.SMS_CONFIG.sendToSecondary && !contact.isPrimary ||
+          SOS_CONFIG.SMS_CONFIG.sendToDebug && SOS_CONFIG.DEBUG_MODE
+        ).map(contact => ({
+          ...contact,
+          phone: String(contact.phone).replace(/[^\d+]/g, '') // Clean phone number (remove - and other chars)
+        }));
+        
+        const smsResults = await sosService.sendMultipleSMS(smsContacts, sosMessage);
+        const successfulSMS = smsResults.filter(result => result.success);
+        console.log(`✅ Sent ${successfulSMS.length}/${smsResults.length} successful SMS`);
+      }
+
+      // Make phone calls if enabled
+      if (SOS_CONFIG.CALL_CONFIG.enabled) {
+        console.log('📞 Making emergency phone calls...');
+        const callContacts = contacts.filter(contact => 
+          SOS_CONFIG.CALL_CONFIG.callPrimary && contact.isPrimary ||
+          SOS_CONFIG.CALL_CONFIG.callSecondary && !contact.isPrimary ||
+          SOS_CONFIG.CALL_CONFIG.callDebug && SOS_CONFIG.DEBUG_MODE
+        ).map(contact => ({
+          ...contact,
+          phone: String(contact.phone).replace(/[^\d+]/g, '') // Clean phone number (remove - and other chars)
+        }));
+        
+        const callResults = await sosService.makeMultipleCalls(callContacts);
+        const successfulCalls = callResults.filter(result => result.success);
+        console.log(`✅ Made ${successfulCalls.length}/${callResults.length} successful calls`);
+      }
+
+      // Show success message
+      Alert.alert(
+        'SOS Activated',
+        `Emergency alert sent to ${contacts.length} contacts.\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
+        [{ text: 'OK' }]
+      );
+
+    } catch (error) {
+      console.error('❌ Error performing SOS actions:', error);
+      Alert.alert('SOS Error', 'Some emergency actions failed. Please try calling emergency services manually.');
+    }
   };
 
   const triggerShakeAlert = async () => {
@@ -264,10 +339,8 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     const docRef = await firestore().collection('emergencyAlerts').add(alert);
     setCurrentAlert({ ...alert, id: docRef.id });
     
-    // Only start recording if auto-record is enabled
-    if (recordingSettings.autoRecordOnEmergency) {
-      await startAudioRecording();
-    }
+    // Skip audio recording to avoid permission issues
+    console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
     try { navigate('Emergency'); } catch {}
@@ -289,10 +362,8 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     const docRef = await firestore().collection('emergencyAlerts').add(alert);
     setCurrentAlert({ ...alert, id: docRef.id });
     
-    // Only start recording if auto-record is enabled
-    if (recordingSettings.autoRecordOnEmergency) {
-      await startAudioRecording();
-    }
+    // Skip audio recording to avoid permission issues
+    console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
     try { navigate('Emergency'); } catch {}
@@ -311,6 +382,18 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     setAlertHistory(list);
   };
 
+  // Helper function to check permissions without requesting them
+  const checkPermissions = async () => {
+    try {
+      // Skip permission check entirely to avoid native crashes
+      console.log('Skipping permission check to avoid native crashes');
+      return false; // Always return false to skip audio recording
+    } catch (error) {
+      console.error('Error checking permissions:', error);
+      return false;
+    }
+  };
+
   const startAudioRecording = async () => {
     try {
       // Check if audio recording is enabled in settings
@@ -324,13 +407,41 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
         return;
       }
 
-      // Check for audio recording permission first
-      const permission = Platform.OS === 'ios' 
-        ? PERMISSIONS.IOS.MICROPHONE 
-        : PERMISSIONS.ANDROID.RECORD_AUDIO;
+      // Check for audio recording permission with better error handling
+      let permission;
+      try {
+        permission = Platform.OS === 'ios' 
+          ? PERMISSIONS.IOS.MICROPHONE 
+          : PERMISSIONS.ANDROID.RECORD_AUDIO;
+        
+        console.log('Platform:', Platform.OS);
+        console.log('Permission object:', permission);
+        
+        if (!permission) {
+          console.error('Permission is null or undefined');
+          console.log('Available permissions:', Object.keys(PERMISSIONS.ANDROID || {}));
+          Alert.alert('Permission Error', 'Unable to request audio recording permission. Please check app permissions in settings.');
+          return;
+        }
+      } catch (permissionError) {
+        console.error('Error getting permission object:', permissionError);
+        Alert.alert('Permission Error', 'Unable to access permission system. Please check app permissions in settings.');
+        return;
+      }
       
-      const result = await request(permission);
+      let result;
+      try {
+        console.log('Requesting permission:', permission);
+        result = await request(permission);
+        console.log('Permission result:', result);
+      } catch (error) {
+        console.error('Permission request error:', error);
+        Alert.alert('Permission Error', 'Failed to request audio recording permission. Please try again.');
+        return;
+      }
+      
       if (result !== RESULTS.GRANTED) {
+        console.log('Permission not granted:', result);
         Alert.alert('Permission Required', 'Audio recording permission is required for emergency features.');
         return;
       }
@@ -392,15 +503,73 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
   const stopVideoRecording = async (): Promise<string | null> => null;
 
   const dialEmergencyNumber = () => {
-    if (Platform.OS === 'android') {
-      Linking.openURL(`tel:100`);
+    // Use the SOS service to make immediate calls to emergency numbers
+    const emergencyContacts = SOS_CONFIG.PRIMARY_CONTACTS.filter(contact => contact.isEmergency);
+    
+    if (emergencyContacts.length > 0) {
+      // Ensure contact phone number is a string and clean it (remove - and other chars)
+      const contact = {
+        ...emergencyContacts[0],
+        phone: String(emergencyContacts[0].phone).replace(/[^\d+]/g, '')
+      };
+      
+      // Call the first emergency contact immediately
+      sosService.makePhoneCall(contact)
+        .then(result => {
+          if (result.success) {
+            console.log(`✅ Emergency call initiated to ${result.contact.name}`);
+          } else {
+            console.error(`❌ Failed to call ${result.contact.name}:`, result.error);
+            // Fallback to system dialer
+            const phoneUrl = Platform.OS === 'android' ? `tel:100` : `tel:112`;
+            Linking.openURL(phoneUrl);
+          }
+        })
+        .catch(error => {
+          console.error('Error making emergency call:', error);
+          // Fallback to system dialer
+          const phoneUrl = Platform.OS === 'android' ? `tel:100` : `tel:112`;
+          Linking.openURL(phoneUrl);
+        });
     } else {
-      Linking.openURL(`tel:112`);
+      // Fallback to system dialer
+      const phoneUrl = Platform.OS === 'android' ? `tel:100` : `tel:112`;
+      Linking.openURL(phoneUrl);
     }
   };
 
   const sendSMS = async (phoneNumber: string, message: string): Promise<void> => {
-    await Linking.openURL(`sms:${phoneNumber}?body=${encodeURIComponent(message)}`);
+    try {
+      // Use SOS service for direct SMS sending with proper string conversion
+      const contact = {
+        name: 'Emergency Contact',
+        phone: String(phoneNumber), // Ensure it's a string
+        isPrimary: true,
+        isEmergency: true,
+      };
+      
+      const result = await sosService.sendSMS(contact, String(message)); // Ensure it's a string
+      
+      if (result.success) {
+        console.log(`✅ SMS sent successfully to ${phoneNumber}`);
+      } else {
+        console.error(`❌ Failed to send SMS to ${phoneNumber}:`, result.error);
+        // Fallback to system SMS app with proper encoding
+        const cleanPhone = String(phoneNumber).replace(/[^\d+]/g, ''); // Remove - and other chars, keep + and digits
+        const cleanMessage = String(message);
+        const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(cleanMessage)}`;
+        console.log('Fallback SMS URL:', smsUrl);
+        await Linking.openURL(smsUrl);
+      }
+    } catch (error) {
+      console.error('Error sending SMS:', error);
+      // Fallback to system SMS app with proper encoding
+      const cleanPhone = String(phoneNumber).replace(/[^\d+]/g, ''); // Remove - and other chars, keep + and digits
+      const cleanMessage = String(message);
+      const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(cleanMessage)}`;
+      console.log('Catch fallback SMS URL:', smsUrl);
+      await Linking.openURL(smsUrl);
+    }
   };
 
   const sendEmail = async (email: string, subject: string, message: string): Promise<void> => {

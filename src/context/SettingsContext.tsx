@@ -16,8 +16,8 @@ interface SettingsContextType {
 }
 
 const defaultSettings: RecordingSettings = {
-  audioRecordingEnabled: true,
-  autoRecordOnEmergency: true,
+  audioRecordingEnabled: false, // Disabled by default to avoid permission issues
+  autoRecordOnEmergency: false, // Disabled to prevent permission crashes
   maxRecordingDuration: 5, // 5 minutes
   storageLocation: 'local',
 };
