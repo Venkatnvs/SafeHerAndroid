@@ -14,6 +14,8 @@ import ProfileScreen from '../screens/ProfileScreen';
 import SelfDefenseScreen from '../screens/SelfDefenseScreen';
 import EmergencyScreen from '../screens/EmergencyScreen';
 import CommunityScreen from '../screens/CommunityScreen';
+import SOSSettingsScreen from '../screens/SOSSettingsScreen';
+import GuardianMapScreen from '../screens/GuardianMapScreen';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -144,6 +146,22 @@ const AuthNavigator: React.FC = () => {
               title: 'Emergency',
               headerStyle: { backgroundColor: '#F44336' },
               presentation: 'modal'
+            }}
+          />
+          <Stack.Screen 
+            name="SOSSettings" 
+            component={SOSSettingsScreen}
+            options={{ 
+              title: 'SOS Settings',
+              headerStyle: { backgroundColor: '#E91E63' },
+            }}
+          />
+          <Stack.Screen 
+            name="GuardianMap" 
+            component={GuardianMapScreen}
+            options={{ 
+              title: 'Live Location Map',
+              headerStyle: { backgroundColor: '#4CAF50' },
             }}
           />
         </>

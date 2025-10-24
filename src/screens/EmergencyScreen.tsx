@@ -9,24 +9,82 @@ import {
   StatusBar,
   Dimensions,
   Linking,
+  BackHandler,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useEmergency } from '../context/EmergencyContext';
 import { useLocation } from '../context/LocationContext';
+import { SOSService } from '../services/SOSService';
 
 const { width } = Dimensions.get('window');
 
 const EmergencyScreen = () => {
   const navigation = useNavigation();
-  const { currentAlert, resolveEmergency, notifyQuickContactsSMS } = useEmergency();
+  const { currentAlert, resolveEmergency, sendAlertToGuardians, performSOSActions } = useEmergency();
   const { currentLocation } = useLocation();
+  const sosService = SOSService.getInstance();
   
   const [isResolving, setIsResolving] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(3);
   const [autoActionsStarted, setAutoActionsStarted] = useState(false);
   const [showCancelOption, setShowCancelOption] = useState(true);
+  const [guardianAlertsSent, setGuardianAlertsSent] = useState(false);
+  const [backButtonPressCount, setBackButtonPressCount] = useState(0);
+
+  // Handle back button - require 3 presses to exit emergency screen
+  useFocusEffect(
+    React.useCallback(() => {
+      const onBackPress = () => {
+        setBackButtonPressCount(prev => {
+          const newCount = prev + 1;
+          
+          if (newCount === 1) {
+            Alert.alert(
+              'Emergency Active',
+              'Emergency is still active! Press back button 2 more times to exit.',
+              [{ text: 'OK' }]
+            );
+          } else if (newCount === 2) {
+            Alert.alert(
+              'Emergency Active',
+              'Emergency is still active! Press back button 1 more time to exit.',
+              [{ text: 'OK' }]
+            );
+          } else if (newCount >= 3) {
+            Alert.alert(
+              'Exit Emergency',
+              'Are you sure you want to exit the emergency screen? The emergency will remain active.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                  text: 'Exit', 
+                  style: 'destructive',
+                  onPress: () => {
+                    setBackButtonPressCount(0);
+                    navigation.goBack();
+                  }
+                }
+              ]
+            );
+            return 0; // Reset counter after showing exit dialog
+          }
+          
+          return newCount;
+        });
+        
+        return true; // Prevent default back action
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+      return () => {
+        subscription.remove();
+        setBackButtonPressCount(0); // Reset counter when screen loses focus
+      };
+    }, [navigation])
+  );
 
   const handleResolveEmergency = async () => {
     Alert.alert(
@@ -40,11 +98,27 @@ const EmergencyScreen = () => {
           onPress: async () => {
             setIsResolving(true);
             try {
-              if (!currentAlert) return;
-              await resolveEmergency(currentAlert.id);
+              if (!currentAlert) {
+                Alert.alert('Error', 'No active emergency alert found.');
+                return;
+              }
+              
+              console.log('🔄 Attempting to resolve emergency:', currentAlert.id);
+              await resolveEmergency(currentAlert.id, 'Resolved by user from emergency screen');
+              
+              // Reset spam prevention flags
+              setGuardianAlertsSent(false);
+              setAutoActionsStarted(false);
+              
+              console.log('✅ Emergency resolved successfully, navigating back');
               navigation.goBack();
+              
             } catch (error) {
-              Alert.alert('Error', 'Failed to resolve emergency. Please try again.');
+              console.error('❌ Error resolving emergency:', error);
+              Alert.alert(
+                'Error', 
+                `Failed to resolve emergency: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
+              );
             } finally {
               setIsResolving(false);
             }
@@ -57,30 +131,33 @@ const EmergencyScreen = () => {
   const handleCallEmergency = () => {
     const emergencyNumber = '100';
     const serviceName = 'Police';
-    
+
     Alert.alert(
       'Call Emergency Services',
       `This will dial ${emergencyNumber} (${serviceName}) immediately. Continue?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: `Call ${emergencyNumber}`, onPress: () => {
-          Linking.openURL(`tel:${emergencyNumber}`);
+        { text: `Call ${emergencyNumber}`, onPress: async () => {
+          await sosService.makePhoneCall({ name: serviceName, phone: emergencyNumber, isPrimary: true, isEmergency: true });
         }}
       ]
     );
   };
 
-  const handleContactGuardians = () => {
-    Alert.alert(
-      'Contact Guardians',
-      'Send an additional alert to all your guardians?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Send Alert', onPress: () => {
-          Alert.alert('Alert Sent', 'Additional alerts have been sent to your guardians.');
-        }}
-      ]
-    );
+  const handleContactGuardians = async () => {
+    if (guardianAlertsSent) {
+      Alert.alert('Already Sent', 'Guardian alerts have already been sent for this emergency.');
+      return;
+    }
+    
+    try {
+      const location = currentLocation || { latitude: 0, longitude: 0, accuracy: 0 };
+      await sendAlertToGuardians(location, 'Emergency active. Please help or call me back.');
+      setGuardianAlertsSent(true);
+      Alert.alert('Alert Sent', 'Additional alerts have been sent to your guardians.');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to send alerts.');
+    }
   };
 
   useEffect(() => {
@@ -92,10 +169,43 @@ const EmergencyScreen = () => {
           if (prev <= 1) {
             if (!autoActionsStarted) {
               setAutoActionsStarted(true);
-              const emergencyNumber = '100';
-              Linking.openURL(`tel:${emergencyNumber}`);
-              // Send additional notifications
-              notifyQuickContactsSMS('Emergency active. Please help or call me back.');
+              
+              // Check if this is a new emergency or navigating to existing one
+              const emergencyAge = Date.now() - currentAlert.timestamp.getTime();
+              const isNewEmergency = emergencyAge < 10000; // Less than 10 seconds old
+              
+              console.log('🚨 Countdown completed - Emergency age:', emergencyAge, 'ms');
+              console.log('🚨 Is new emergency:', isNewEmergency);
+              
+              if (isNewEmergency) {
+                // Trigger SOS actions after countdown completes (defer to next tick to avoid setState during render)
+                setTimeout(() => {
+                  const location = currentLocation || currentAlert?.location || { latitude: 0, longitude: 0, accuracy: 0 };
+                  const message = currentAlert?.message || 'Emergency detected';
+                  
+                  console.log('🚨 Countdown completed - Starting SOS actions...');
+                  console.log('📍 Location:', location);
+                  console.log('📝 Message:', message);
+                  console.log('🔧 performSOSActions function:', typeof performSOSActions);
+                  
+                  try {
+                    performSOSActions(location, message);
+                    console.log('✅ performSOSActions called successfully');
+                  } catch (error) {
+                    console.error('❌ Error calling performSOSActions:', error);
+                  }
+                  
+                  // Send additional notifications to guardians (only once)
+                  if (!guardianAlertsSent) {
+                    console.log('👥 Sending guardian alerts...');
+                    sendAlertToGuardians(location, 'Emergency active. Please help or call me back.');
+                    setGuardianAlertsSent(true);
+                  }
+                }, 0);
+              } else {
+                console.log('🚨 Emergency is not new - skipping SOS actions');
+                console.log('🚨 Emergency age:', emergencyAge, 'ms (older than 10 seconds)');
+              }
             }
             return null;
           }
@@ -149,6 +259,9 @@ const EmergencyScreen = () => {
                       onPress: async () => {
                         if (currentAlert) {
                           await resolveEmergency(currentAlert.id, 'Cancelled by user');
+                          // Reset spam prevention flags
+                          setGuardianAlertsSent(false);
+                          setAutoActionsStarted(false);
                           navigation.goBack();
                         }
                       }
@@ -246,7 +359,7 @@ const EmergencyScreen = () => {
 
           <TouchableOpacity 
             style={styles.actionButton}
-            onPress={() => Alert.alert('Safe Zones', 'Opening safe zones map...')}
+            onPress={() => navigation.navigate('SafeZones' as never)}
           >
             <LinearGradient
               colors={['#2196F3', '#1976D2']}

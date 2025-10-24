@@ -548,9 +548,34 @@ export class BackgroundServiceManager {
         this.shakeListener.remove();
       }
 
+      // Stricter shake trigger: require multiple detections within a window
+      let lastShakeTs = 0;
+      let shakeCount = 0;
+      const WINDOW_MS = 1200; // accumulation window
+      const MIN_COUNT = 3; // require 3 shake events
+      const COOLDOWN_MS = 3000; // cooldown between triggers
+      let lastTriggerTs = 0;
+
       this.shakeListener = Shake.addListener(() => {
-        console.log('Shake detected!');
-        this.triggerShakeEmergency();
+        const now = Date.now();
+
+        if (now - lastTriggerTs < COOLDOWN_MS) {
+          return;
+        }
+
+        if (now - lastShakeTs > WINDOW_MS) {
+          shakeCount = 0;
+        }
+
+        lastShakeTs = now;
+        shakeCount += 1;
+
+        if (shakeCount >= MIN_COUNT) {
+          shakeCount = 0;
+          lastTriggerTs = now;
+          console.log('Shake threshold met - triggering emergency');
+          this.triggerShakeEmergency();
+        }
       });
 
       console.log('Shake detection started');

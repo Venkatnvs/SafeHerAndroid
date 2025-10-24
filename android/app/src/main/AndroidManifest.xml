@@ -55,6 +55,11 @@
       android:theme="@style/AppTheme"
       android:requestLegacyExternalStorage="true">
       
+      <!-- Google Maps API Key -->
+      <meta-data
+        android:name="com.google.android.geo.API_KEY"
+        android:value="AIzaSyCE3jEztJrSAapjhUcv6PaQQSfIqJIZbq8" />
+      
       <!-- Allow sending SMS without user interaction (requires SEND_SMS permission) -->
       
       <activity

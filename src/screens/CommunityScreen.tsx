@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { firestore } from '../config/firebase';
 
@@ -22,19 +23,42 @@ interface CommunityMessage {
   message: string;
   timestamp: Date;
   isAnonymous: boolean;
-  category: 'general' | 'safety_tips' | 'support' | 'resources';
+  category: 'general' | 'safety_tips' | 'support';
 }
 
 const CommunityScreen = () => {
   const { user } = useAuth();
   const [messages, setMessages] = useState<CommunityMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<'general' | 'safety_tips' | 'support' | 'resources'>('general');
+  const [selectedCategory, setSelectedCategory] = useState<'general' | 'safety_tips' | 'support'>('general');
   const [loading, setLoading] = useState(false);
+  const [isSafetyNoticeHidden, setIsSafetyNoticeHidden] = useState(false);
 
   useEffect(() => {
     loadMessages();
+    loadSafetyNoticePreference();
   }, [selectedCategory]);
+
+  const loadSafetyNoticePreference = async () => {
+    try {
+      const hidden = await AsyncStorage.getItem('safetyNoticeHidden');
+      if (hidden !== null) {
+        setIsSafetyNoticeHidden(JSON.parse(hidden));
+      }
+    } catch (error) {
+      console.error('Error loading safety notice preference:', error);
+    }
+  };
+
+  const toggleSafetyNotice = async () => {
+    try {
+      const newHiddenState = !isSafetyNoticeHidden;
+      setIsSafetyNoticeHidden(newHiddenState);
+      await AsyncStorage.setItem('safetyNoticeHidden', JSON.stringify(newHiddenState));
+    } catch (error) {
+      console.error('Error saving safety notice preference:', error);
+    }
+  };
 
   const loadMessages = async () => {
     try {
@@ -54,7 +78,7 @@ const CommunityScreen = () => {
         } as CommunityMessage;
       });
 
-      setMessages(messageList.reverse());
+      setMessages(messageList);
     } catch (error) {
       console.error('Error loading messages:', error);
     }
@@ -120,63 +144,17 @@ const CommunityScreen = () => {
     </View>
   );
 
-  const safetyResources = [
-    {
-      title: 'Women Helpline',
-      number: '1091',
-      description: '24/7 helpline for women in distress',
-      icon: 'phone'
-    },
-    {
-      title: 'Police Emergency',
-      number: '100',
-      description: 'Emergency police assistance',
-      icon: 'police-badge'
-    },
-    {
-      title: 'Domestic Violence Helpline',
-      number: '181',
-      description: 'Support for domestic violence victims',
-      icon: 'shield'
-    },
-    {
-      title: 'Mental Health Support',
-      number: '080-46110007',
-      description: 'Counselling and mental health support',
-      icon: 'heart'
-    }
-  ];
 
-  const renderContent = () => {
-    if (selectedCategory === 'resources') {
-      return (
-        <View style={styles.resourcesContainer}>
-          <Text style={styles.resourcesTitle}>Safety Resources</Text>
-          {safetyResources.map((resource, index) => (
-            <TouchableOpacity key={index} style={styles.resourceCard}>
-              <Icon name={resource.icon} size={24} color="#E91E63" />
-              <View style={styles.resourceInfo}>
-                <Text style={styles.resourceTitle}>{resource.title}</Text>
-                <Text style={styles.resourceNumber}>{resource.number}</Text>
-                <Text style={styles.resourceDescription}>{resource.description}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-      );
-    }
-
-    return (
-      <FlatList
-        data={messages}
-        renderItem={({ item }) => <MessageItem message={item} />}
-        keyExtractor={(item) => item.id}
-        style={styles.messagesList}
-        inverted
-        showsVerticalScrollIndicator={false}
-      />
-    );
-  };
+  const renderContent = () => (
+    <FlatList
+      data={messages}
+      renderItem={({ item }) => <MessageItem message={item} />}
+      keyExtractor={(item) => item.id}
+      style={styles.messagesList}
+      inverted
+      showsVerticalScrollIndicator={false}
+    />
+  );
 
   return (
     <View style={styles.container}>
@@ -211,11 +189,6 @@ const CommunityScreen = () => {
           title="Support" 
           icon="heart" 
         />
-        <CategoryButton 
-          category="resources" 
-          title="Resources" 
-          icon="book" 
-        />
       </View>
 
       {/* Content */}
@@ -224,8 +197,7 @@ const CommunityScreen = () => {
       </View>
 
       {/* Message Input */}
-      {selectedCategory !== 'resources' && (
-        <View style={styles.inputContainer}>
+      <View style={styles.inputContainer}>
           <TextInput
             style={styles.messageInput}
             value={newMessage}
@@ -242,15 +214,22 @@ const CommunityScreen = () => {
             <Icon name="send" size={20} color="white" />
           </TouchableOpacity>
         </View>
-      )}
 
       {/* Safety Notice */}
-      <View style={styles.safetyNotice}>
-        <Icon name="shield-check" size={16} color="#4CAF50" />
-        <Text style={styles.safetyText}>
-          All messages are anonymous and moderated for your safety
-        </Text>
-      </View>
+      {!isSafetyNoticeHidden && (
+        <View style={styles.safetyNotice}>
+          <Icon name="shield-check" size={16} color="#4CAF50" />
+          <Text style={styles.safetyText}>
+            All messages are anonymous and moderated for your safety
+          </Text>
+          <TouchableOpacity 
+            style={styles.dismissButton}
+            onPress={toggleSafetyNotice}
+          >
+            <Icon name="close" size={16} color="#4CAF50" />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
@@ -389,49 +368,6 @@ const styles = StyleSheet.create({
   sendButtonDisabled: {
     backgroundColor: '#CCC',
   },
-  resourcesContainer: {
-    flex: 1,
-    paddingTop: 16,
-  },
-  resourcesTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 20,
-  },
-  resourceCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-  },
-  resourceInfo: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  resourceTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
-  },
-  resourceNumber: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#E91E63',
-    marginBottom: 4,
-  },
-  resourceDescription: {
-    fontSize: 14,
-    color: '#666',
-  },
   safetyNotice: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -446,6 +382,11 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
     marginLeft: 8,
     fontWeight: '500',
+    flex: 1,
+  },
+  dismissButton: {
+    padding: 4,
+    marginLeft: 8,
   },
 });
 

@@ -20,12 +20,14 @@ import { useEmergency } from '../context/EmergencyContext';
 import { useSettings } from '../context/SettingsContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FileUtils } from '../utils/FileUtils';
+import { useNavigation } from '@react-navigation/native';
 
 const ProfileScreen = () => {
   const { user, signOut, updateProfile, addEmergencyContact, removeEmergencyContact } = useAuth();
   const { isLocationEnabled, requestLocationPermission, startLocationTracking, stopLocationTracking } = useLocation();
   const { isShakeEnabled, isVoiceEnabled, setupShakeDetection, setupVoiceDetection } = useEmergency();
-  const { recordingSettings, updateRecordingSettings, resetToDefaults } = useSettings();
+  const { recordingSettings, updateRecordingSettings, resetToDefaults, sosSettings } = useSettings();
+  const navigation = useNavigation();
   
   const [loading, setLoading] = useState(false);
   const [editProfileModal, setEditProfileModal] = useState(false);
@@ -165,12 +167,16 @@ const ProfileScreen = () => {
     }
   };
 
-  const handleVoiceToggle = () => {
+  const handleVoiceToggle = async () => {
     if (isVoiceEnabled) {
       Alert.alert('Voice Detection Disabled', 'Voice commands have been disabled');
     } else {
-      setupVoiceDetection();
-      Alert.alert('Voice Detection Enabled', 'Say "help" or "emergency" to trigger SOS');
+      try {
+        await setupVoiceDetection();
+        Alert.alert('Voice Detection Enabled', 'Say "help", "emergency", "bachao", or "madad" to trigger SOS');
+      } catch (error) {
+        Alert.alert('Voice Detection Error', 'Failed to enable voice detection. Please check microphone permissions.');
+      }
     }
   };
 
@@ -313,42 +319,17 @@ const ProfileScreen = () => {
           <Text style={styles.sectionTitle}>Safety & Security</Text>
           
           <ProfileMenuItem
-            icon="crosshairs-gps"
-            title="Location Settings"
-            subtitle={isLocationEnabled ? "Location tracking enabled" : "Location tracking disabled"}
-            onPress={handleLocationToggle}
-            color="#2196F3"
-          />
-          
-          <ProfileMenuItem
-            icon="phone"
-            title="Shake Detection"
-            subtitle={isShakeEnabled ? "Shake to SOS enabled" : "Shake to SOS disabled"}
-            onPress={handleShakeToggle}
-            color="#9C27B0"
-          />
-          
-          <ProfileMenuItem
-            icon="microphone"
-            title="Voice Commands"
-            subtitle={isVoiceEnabled ? "Voice commands enabled" : "Voice commands disabled"}
-            onPress={handleVoiceToggle}
-            color="#FF5722"
+            icon="phone-alert"
+            title="SOS Settings"
+            subtitle={`Call: ${sosSettings.selectedCallContact?.name || 'Not set'}, SMS: ${sosSettings.selectedSMSContacts.length} contact(s)`}
+            onPress={() => navigation.navigate('SOSSettings' as never)}
+            color="#E91E63"
           />
         </View>
 
         {/* Recording Settings Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recording Settings</Text>
-          
-          <SettingsItem
-            title="Audio Recording"
-            subtitle="Enable audio recording during emergencies"
-            value={recordingSettings.audioRecordingEnabled}
-            onValueChange={(value) => handleRecordingSettingChange('audioRecordingEnabled', value)}
-            icon="microphone"
-            color="#673AB7"
-          />
           
           <SettingsItem
             title="Auto Record on Emergency"

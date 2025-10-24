@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,8 +15,9 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../context/AuthContext';
-import { firestore } from '../config/firebase';
+import { firestore, auth } from '../config/firebase';
 import { INDIAN_EMERGENCY_NUMBERS } from '../constants/IndianEmergencyNumbers';
+import { useNavigation } from '@react-navigation/native';
 
 interface ProtectedUser {
   id: string;
@@ -33,23 +34,29 @@ interface ProtectedUser {
   emergencyContacts: any[];
 }
 
+interface EmergencyAlertItem {
+  id: string;
+  userId: string;
+  message?: string;
+  timestamp: Date;
+  status: 'active' | 'resolved' | 'false_alarm';
+  location?: { latitude: number; longitude: number; address?: string };
+}
+
 const GuardianDashboardScreen = () => {
   const { user } = useAuth();
+  const navigation = useNavigation();
   const [protectedUsers, setProtectedUsers] = useState<ProtectedUser[]>([]);
+  const [activeAlerts, setActiveAlerts] = useState<EmergencyAlertItem[]>([]);
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const alertUnsubscribersRef = useRef<(() => void)[]>([]);
 
   useEffect(() => {
     loadProtectedUsers();
-    
-    // Set up real-time monitoring
-    const interval = setInterval(() => {
-      loadProtectedUsers();
-    }, 30000); // Update every 30 seconds
-
-    return () => clearInterval(interval);
+    return () => cleanupAlertSubscriptions();
   }, []);
 
   const loadProtectedUsers = async () => {
@@ -86,11 +93,81 @@ const GuardianDashboardScreen = () => {
           });
           
           setProtectedUsers(users);
+          subscribeToActiveAlerts(users.map(u => u.id));
+          subscribeToLiveLocationUpdates(users.map(u => u.id));
         }
       }
     } catch (error) {
       console.error('Error loading protected users:', error);
     }
+  };
+
+  const cleanupAlertSubscriptions = () => {
+    alertUnsubscribersRef.current.forEach(unsub => { try { unsub(); } catch {} });
+    alertUnsubscribersRef.current = [];
+  };
+
+  const subscribeToActiveAlerts = (userIds: string[]) => {
+    cleanupAlertSubscriptions();
+    setActiveAlerts([]);
+    if (!userIds || userIds.length === 0) return;
+
+    userIds.forEach(uid => {
+      const unsub = firestore()
+        .collection('emergencyAlerts')
+        .where('userId', '==', uid)
+        .where('status', '==', 'active')
+        .onSnapshot(snapshot => {
+          const newAlerts = snapshot.docs.map(doc => {
+            const d: any = doc.data();
+            return {
+              id: doc.id,
+              userId: d.userId,
+              message: d.message,
+              status: d.status,
+              timestamp: (d.timestamp?.toDate && d.timestamp.toDate()) || new Date(),
+              location: d.location,
+            } as EmergencyAlertItem;
+          });
+
+          setActiveAlerts(prev => {
+            const withoutUid = prev.filter(a => a.userId !== uid);
+            return [...withoutUid, ...newAlerts].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+          });
+        }, err => console.log('Alert subscription error:', err));
+
+      alertUnsubscribersRef.current.push(unsub);
+    });
+  };
+
+  // Subscribe to live location updates for protected users during emergencies
+  const subscribeToLiveLocationUpdates = (userIds: string[]) => {
+    if (!userIds || userIds.length === 0) return;
+
+    userIds.forEach(uid => {
+      const unsub = firestore()
+        .collection('users')
+        .doc(uid)
+        .onSnapshot(doc => {
+          if (doc.exists) {
+            const userData = doc.data();
+            setProtectedUsers(prev => 
+              prev.map(user => 
+                user.id === uid 
+                  ? {
+                      ...user,
+                      currentLocation: userData?.currentLocation,
+                      lastSeen: userData?.lastLocationUpdate?.toDate() || user.lastSeen,
+                      isOnline: userData?.isOnline || false
+                    }
+                  : user
+              )
+            );
+          }
+        }, err => console.log('Live location subscription error:', err));
+
+      alertUnsubscribersRef.current.push(unsub);
+    });
   };
 
   const searchUsersByPhone = async () => {
@@ -206,6 +283,103 @@ const GuardianDashboardScreen = () => {
     });
   };
 
+  const viewOnMap = (lat?: number, lon?: number) => {
+    if (!lat || !lon) return;
+    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+    Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open Maps.'));
+  };
+
+  const resolveAlert = async (alertId: string) => {
+    try {
+      console.log('🔄 Guardian resolving alert:', alertId);
+      
+      const user = auth().currentUser;
+      if (!user) {
+        Alert.alert('Error', 'You must be logged in to resolve alerts.');
+        return;
+      }
+
+      await firestore()
+        .collection('emergencyAlerts')
+        .doc(alertId)
+        .update({
+          status: 'resolved',
+          resolvedAt: new Date(),
+          resolvedBy: user.uid,
+          resolutionReason: 'Resolved by guardian'
+        });
+      
+      console.log('✅ Alert resolved by guardian successfully');
+      
+    } catch (error) {
+      console.error('❌ Error resolving alert:', error);
+      Alert.alert(
+        'Error', 
+        `Failed to resolve alert: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
+      );
+    }
+  };
+
+  const handleResolveAllAlerts = async () => {
+    if (activeAlerts.length === 0) {
+      Alert.alert('No Alerts', 'There are no active alerts to resolve.');
+      return;
+    }
+
+    Alert.alert(
+      'Resolve All Alerts',
+      `Are you sure you want to resolve all ${activeAlerts.length} active alerts? This will mark all emergencies as resolved.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Resolve All', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              console.log(`🔄 Guardian resolving all ${activeAlerts.length} alerts...`);
+              
+              const user = auth().currentUser;
+              if (!user) {
+                Alert.alert('Error', 'You must be logged in to resolve alerts.');
+                return;
+              }
+
+              // Resolve all active alerts
+              const resolvePromises = activeAlerts.map(alert => 
+                firestore()
+                  .collection('emergencyAlerts')
+                  .doc(alert.id)
+                  .update({
+                    status: 'resolved',
+                    resolvedAt: new Date(),
+                    resolvedBy: user.uid,
+                    resolutionReason: 'Resolved by guardian (Resolve All)'
+                  })
+              );
+
+              await Promise.all(resolvePromises);
+              
+              console.log(`✅ All ${activeAlerts.length} alerts resolved by guardian successfully`);
+              
+              Alert.alert(
+                'Success',
+                `All ${activeAlerts.length} alerts have been resolved successfully.`,
+                [{ text: 'OK' }]
+              );
+              
+            } catch (error) {
+              console.error('❌ Error resolving all alerts:', error);
+              Alert.alert(
+                'Error', 
+                `Failed to resolve some alerts: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
+              );
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const formatLastSeen = (lastSeen: Date) => {
     const now = new Date();
     const diffInMinutes = Math.floor((now.getTime() - lastSeen.getTime()) / (1000 * 60));
@@ -283,6 +457,23 @@ const GuardianDashboardScreen = () => {
           <Icon name="shield-account" size={60} color="white" />
           <Text style={styles.headerTitle}>Guardian Dashboard</Text>
           <Text style={styles.headerSubtitle}>Monitor and protect your loved ones</Text>
+          {activeAlerts.length > 0 && (
+            <View style={styles.alertBadge}>
+              <Icon name="bell-alert" size={16} color="white" />
+              <Text style={styles.alertBadgeText}>{activeAlerts.length}</Text>
+            </View>
+          )}
+          
+          {/* Map Button - Only show if there are protected users */}
+          {protectedUsers.length > 0 && (
+            <TouchableOpacity
+              style={styles.mapButton}
+              onPress={() => navigation.navigate('GuardianMap' as never)}
+            >
+              <Icon name="map" size={20} color="white" />
+              <Text style={styles.mapButtonText}>View Live Map</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </LinearGradient>
 
@@ -308,10 +499,79 @@ const GuardianDashboardScreen = () => {
             
             <View style={styles.statusCard}>
               <Icon name="alert" size={32} color="#FF9800" />
-              <Text style={styles.statusNumber}>0</Text>
+              <Text style={styles.statusNumber}>{activeAlerts.length}</Text>
               <Text style={styles.statusLabel}>Active Alerts</Text>
             </View>
           </View>
+        </View>
+
+        {/* Active Alerts */}
+        <View style={styles.alertsSection}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Active Alerts</Text>
+            {activeAlerts.length > 0 && (
+              <TouchableOpacity
+                style={styles.resolveAllButton}
+                onPress={handleResolveAllAlerts}
+                activeOpacity={0.8}
+              >
+                <Icon name="check-all" size={16} color="#4CAF50" />
+                <Text style={styles.resolveAllText}>Resolve All</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {activeAlerts.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Icon name="bell-outline" size={64} color="#E0E0E0" />
+              <Text style={styles.emptyStateText}>No active alerts</Text>
+              <Text style={styles.emptyStateSubtext}>You'll see alerts from protected users here</Text>
+            </View>
+          ) : (
+            activeAlerts.map(alert => {
+              const pu = protectedUsers.find(u => u.id === alert.userId);
+              const currentLocation = pu?.currentLocation || alert.location;
+              return (
+                <View key={alert.id} style={styles.alertCard}>
+                  <View style={styles.alertInfo}>
+                    <Text style={styles.alertTitle}>🚨 {pu?.name || 'User'} needs help</Text>
+                    {!!alert.message && (
+                      <Text style={styles.alertMessage}>{alert.message}</Text>
+                    )}
+                    <Text style={styles.alertTime}>{alert.timestamp.toLocaleString()}</Text>
+                    
+                    {/* Live Location Status */}
+                    <View style={styles.liveLocationContainer}>
+                      <Icon name="crosshairs-gps" size={16} color="#4CAF50" />
+                      <Text style={styles.liveLocationText}>
+                        Live Location: {currentLocation?.address || `${currentLocation?.latitude?.toFixed(4)}, ${currentLocation?.longitude?.toFixed(4)}`}
+                      </Text>
+                    </View>
+                    
+                    {/* Last Update Time */}
+                    <Text style={styles.lastUpdateText}>
+                      Last update: {pu?.lastSeen ? formatLastSeen(pu.lastSeen) : 'Unknown'}
+                    </Text>
+                  </View>
+                  <View style={styles.alertActions}>
+                    <TouchableOpacity style={styles.alertActionBtn} onPress={() => callUser(pu?.phoneNumber || '')}>
+                      <Icon name="phone" size={18} color="#4CAF50" />
+                      <Text style={styles.alertActionText}>Call</Text>
+                    </TouchableOpacity>
+                    {currentLocation?.latitude && (
+                      <TouchableOpacity style={styles.alertActionBtn} onPress={() => viewOnMap(currentLocation.latitude, currentLocation.longitude)}>
+                        <Icon name="map" size={18} color="#2196F3" />
+                        <Text style={styles.alertActionText}>Live Map</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity style={styles.alertActionBtn} onPress={() => resolveAlert(alert.id)}>
+                      <Icon name="check-circle" size={18} color="#009688" />
+                      <Text style={styles.alertActionText}>Resolve</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })
+          )}
         </View>
 
         {/* Add User Section */}
@@ -439,6 +699,37 @@ const styles = StyleSheet.create({
   headerContent: {
     alignItems: 'center',
   },
+  alertBadge: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(244, 67, 54, 0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  alertBadgeText: {
+    color: 'white',
+    marginLeft: 6,
+    fontWeight: '700',
+  },
+  mapButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  mapButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
   headerTitle: {
     fontSize: 28,
     fontWeight: 'bold',
@@ -463,6 +754,28 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  resolveAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  resolveAllText: {
+    color: '#4CAF50',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   statusGrid: {
     flexDirection: 'row',
@@ -519,6 +832,74 @@ const styles = StyleSheet.create({
   },
   usersSection: {
     marginTop: 30,
+  },
+  alertsSection: {
+    marginTop: 30,
+  },
+  alertCard: {
+    backgroundColor: 'white',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+  },
+  alertInfo: {
+    marginBottom: 12,
+  },
+  alertTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#D32F2F',
+    marginBottom: 6,
+  },
+  alertMessage: {
+    fontSize: 14,
+    color: '#444',
+    marginBottom: 6,
+  },
+  alertTime: {
+    fontSize: 12,
+    color: '#666',
+  },
+  liveLocationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  liveLocationText: {
+    fontSize: 13,
+    color: '#4CAF50',
+    marginLeft: 6,
+    fontWeight: '600',
+  },
+  lastUpdateText: {
+    fontSize: 11,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  alertActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  alertActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 8,
+  },
+  alertActionText: {
+    marginLeft: 6,
+    color: '#333',
+    fontSize: 13,
+    fontWeight: '600',
   },
   userCard: {
     flexDirection: 'row',
@@ -677,6 +1058,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     marginRight: 12,
+    backgroundColor: 'white',
+    color: '#333',
   },
   searchButton: {
     backgroundColor: '#4CAF50',

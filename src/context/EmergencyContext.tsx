@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { Platform, Linking, Alert, Vibration } from 'react-native';
 import { auth, firestore, storage, messaging } from '../config/firebase';
 import { navigate } from '../utils/NavigationService';
@@ -7,11 +7,18 @@ import { INDIAN_EMERGENCY_MESSAGES } from '../constants/IndianEmergencyNumbers';
 import { SafeLocationService } from '../services/SafeLocationService';
 import { request, check, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { FileUtils } from '../utils/FileUtils';
-import { useSettings } from './SettingsContext';
 import { SOSService } from '../services/SOSService';
+import { PushNotificationService, PushNotificationMessage } from '../services/PushNotificationService';
 import { SOS_CONFIG, formatSOSMessage, getActiveContacts } from '../config/sosConfig';
 
-// Conditional imports to prevent NativeEventEmitter warnings
+// Global reference to EmergencyContext's updateSOSSettings function
+let globalUpdateSOSSettings: ((newSettings: any) => void) | null = null;
+
+export const setGlobalUpdateSOSSettings = (fn: (newSettings: any) => void) => {
+  globalUpdateSOSSettings = fn;
+};
+
+export const getGlobalUpdateSOSSettings = () => globalUpdateSOSSettings;
 let BackgroundTimer: any = null;
 let Shake: any = null;
 let Voice: any = null;
@@ -74,7 +81,9 @@ interface EmergencyContextType {
   triggerVoiceAlert: () => Promise<void>;
   resolveEmergency: (alertId: string, reason?: string) => Promise<void>;
   loadAlertHistory: () => Promise<void>;
-  sendAlertToGuardians: (alert: EmergencyAlert) => Promise<void>;
+  sendAlertToGuardians: (location: any, message: string) => Promise<void>;
+  performSOSActions: (location: any, message: string) => Promise<void>;
+  updateSOSSettings: (newSettings: any) => void;
   startAudioRecording: () => Promise<void>;
   stopAudioRecording: () => Promise<string | null>;
   startVideoRecording: () => Promise<void>;
@@ -89,36 +98,138 @@ const EmergencyContext = createContext<EmergencyContextType | undefined>(undefin
 
 export const useEmergency = () => {
   const context = useContext(EmergencyContext);
-  if (!context) throw new Error('useEmergency must be used within an EmergencyProvider');
+  if (!context) {
+    console.error('useEmergency must be used within an EmergencyProvider');
+    throw new Error('useEmergency must be used within an EmergencyProvider');
+  }
   return context;
 };
 
 export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { recordingSettings } = useSettings();
+  // Initialize with default settings to avoid dependency issues
+  const [recordingSettings] = useState({
+    audioRecordingEnabled: false,
+    autoRecordOnEmergency: false,
+    maxRecordingDuration: 5,
+    storageLocation: 'local' as const,
+  });
+  
+  const [sosSettings, setSosSettings] = useState({
+    selectedCallContact: {
+      name: 'Police',
+      phone: '100',
+      isPrimary: true,
+      isEmergency: true,
+    },
+    selectedSMSContacts: [
+      {
+        name: 'Police',
+        phone: '100',
+        isPrimary: true,
+        isEmergency: true,
+      },
+    ],
+    availableHelplines: [
+      { name: 'Police', phone: '100', isPrimary: true, isEmergency: true },
+      { name: 'Medical Emergency', phone: '102', isPrimary: true, isEmergency: true },
+      { name: 'Women Helpline', phone: '1091', isPrimary: true, isEmergency: true },
+      { name: 'Fire', phone: '101', isPrimary: true, isEmergency: true },
+      { name: 'Child Helpline', phone: '1098', isPrimary: true, isEmergency: true },
+    ],
+    deviceContacts: [],
+    contactsLoaded: false,
+  });
   const [currentAlert, setCurrentAlert] = useState<EmergencyAlert | null>(null);
   const [alertHistory, setAlertHistory] = useState<EmergencyAlert[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isShakeEnabled, setIsShakeEnabled] = useState(false);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const [lastSOSTrigger, setLastSOSTrigger] = useState<number>(0);
+  const [sosCooldownPeriod] = useState(30000); // 30 seconds cooldown
+  
+  // Function to update SOS settings from SettingsContext
+  const updateSOSSettings = (newSettings: any) => {
+    console.log('🔄 Updating SOS settings in EmergencyContext:', newSettings);
+    console.log('🔄 Previous SOS settings:', sosSettings);
+    setSosSettings(prev => {
+      const updated = { ...prev, ...newSettings };
+      console.log('🔄 Updated SOS settings:', updated);
+      return updated;
+    });
+  };
+  
+  // Set global reference for SettingsContext to use
+  setGlobalUpdateSOSSettings(updateSOSSettings);
+  
+  // Load initial SOS settings from AsyncStorage
+  useEffect(() => {
+    const loadInitialSOSSettings = async () => {
+      try {
+        console.log('🔄 Loading initial SOS settings from AsyncStorage...');
+        const savedSOSSettings = await AsyncStorage.getItem('sosSettings');
+        if (savedSOSSettings) {
+          const parsedSettings = JSON.parse(savedSOSSettings);
+          console.log('🔄 Loaded SOS settings from storage:', parsedSettings);
+          setSosSettings(prev => ({ ...prev, ...parsedSettings }));
+        } else {
+          console.log('🔄 No saved SOS settings found, using defaults');
+        }
+      } catch (error) {
+        console.error('❌ Error loading initial SOS settings:', error);
+      }
+    };
+    
+    loadInitialSOSSettings();
+  }, []);
   
   // Initialize SOS Service
   const sosService = SOSService.getInstance();
   sosService.setConfig(SOS_CONFIG);
 
+  // Initialize Push Notification Service
+  const pushNotificationService = PushNotificationService.getInstance();
+
   const [audioRecorder, setAudioRecorder] = useState<any>(null);
   const [recordingPath, setRecordingPath] = useState<string>('');
   const [backgroundTimer, setBackgroundTimer] = useState<any>(null);
   const [shakeListener, setShakeListener] = useState<any>(null);
+  
+  // Shake detection tuning
+  const SHAKE_WINDOW_MS = 1200;
+  const SHAKE_MIN_COUNT = 3;
+  const SHAKE_COOLDOWN_MS = 3000;
+  const lastShakeTimestampRef = useRef<number>(0);
+  const lastShakeTriggerRef = useRef<number>(0);
+  const shakeCountRef = useRef<number>(0);
 
   const setupPushNotifications = async () => {
     try {
-      const token = await messaging().getToken();
-      const user = auth().currentUser;
-      if (user && token) {
-        await firestore().collection('users').doc(user.uid).update({ fcmToken: token, pushNotificationsEnabled: true });
+      console.log('🔔 Setting up push notifications...');
+      
+      // Request notification permissions
+      const hasPermission = await pushNotificationService.requestNotificationPermissions();
+      if (!hasPermission) {
+        console.log('❌ Notification permissions not granted');
+        return;
       }
-    } catch (e) {}
+
+      // Get and update FCM token
+      const token = await pushNotificationService.getCurrentUserToken();
+      const user = auth().currentUser;
+      
+      if (user && token) {
+        await pushNotificationService.updateUserToken(user.uid, token);
+        console.log('✅ FCM token updated for user');
+      }
+
+      // Setup notification listeners
+      pushNotificationService.setupNotificationListeners();
+      
+      console.log('✅ Push notifications setup complete');
+    } catch (error) {
+      console.error('❌ Error setting up push notifications:', error);
+    }
   };
 
   const setupShakeDetection = () => {
@@ -128,7 +239,28 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
         return;
       }
       if (shakeListener) shakeListener.remove();
-      const listener = Shake.addListener(() => { triggerShakeAlert(); });
+      const listener = Shake.addListener(() => {
+        const now = Date.now();
+        // Enforce cooldown to avoid rapid re-triggers
+        if (now - lastShakeTriggerRef.current < SHAKE_COOLDOWN_MS) {
+          return;
+        }
+
+        // Reset counter if outside the accumulation window
+        if (now - lastShakeTimestampRef.current > SHAKE_WINDOW_MS) {
+          shakeCountRef.current = 0;
+        }
+
+        lastShakeTimestampRef.current = now;
+        shakeCountRef.current += 1;
+
+        if (shakeCountRef.current >= SHAKE_MIN_COUNT) {
+          // Reached required intensity
+          shakeCountRef.current = 0;
+          lastShakeTriggerRef.current = now;
+          triggerShakeAlert();
+        }
+      });
       setShakeListener(listener);
       setIsShakeEnabled(true);
     } catch (error) {
@@ -136,60 +268,296 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  const setupVoiceDetection = () => {
+  const setupVoiceDetection = async () => {
     try {
       if (!Voice) {
         console.log('Voice detection not available');
         return;
       }
-      Voice.onSpeechStart = () => setIsListening(true);
-      Voice.onSpeechEnd = () => setIsListening(false);
+
+      // Request microphone permission first
+      const microphonePermission = await request(
+        Platform.OS === 'android' 
+          ? PERMISSIONS.ANDROID.RECORD_AUDIO 
+          : PERMISSIONS.IOS.MICROPHONE
+      );
+
+      if (microphonePermission !== RESULTS.GRANTED) {
+        console.log('Microphone permission denied');
+        Alert.alert(
+          'Microphone Permission Required',
+          'SafeHer needs microphone access to detect voice commands. Please enable it in settings.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      console.log('Setting up voice detection...');
+
+      // Set up voice event handlers
+      Voice.onSpeechStart = () => {
+        console.log('🎤 Voice recognition started');
+        setIsListening(true);
+      };
+
+      Voice.onSpeechEnd = () => {
+        console.log('🎤 Voice recognition ended');
+        setIsListening(false);
+        
+        // Restart listening after a short delay to maintain continuous listening
+        setTimeout(() => {
+          if (isVoiceEnabled) {
+            console.log('🔄 Restarting voice listening after speech end...');
+            startVoiceListeningWithRetry();
+          }
+        }, 500); // Reduced delay for faster restart
+      };
+
       Voice.onSpeechResults = (event: any) => {
+        console.log('🎤 Voice results:', event.value);
         const results = event.value || [];
-        const keywords = ['help', 'help me', 'emergency', 'sos', 'danger', 'police', 'save me', 'please help', 'i am in danger', 'call police'];
-        if (results.some((r: string) => keywords.some(k => r.toLowerCase().includes(k)))) {
+        
+        // Comprehensive emergency keywords in English and Hindi
+        const keywords = [
+          // English keywords
+          'help', 'help me', 'emergency', 'sos', 'danger', 'police', 
+          'save me', 'please help', 'i am in danger', 'call police',
+          'fire', 'ambulance', 'hospital', 'attack', 'threat', 'dangerous',
+          'someone help', 'call help', 'emergency help', 'i need help',
+          'danger help', 'police help', 'save help', 'urgent help',
+          
+          // Hindi keywords
+          'bachao', 'madad', 'police bulao', 'emergency', 'sahayata',
+          'police ko bulao', 'ambulance bulao', 'hospital bulao',
+          'madad chahiye', 'bachao madad', 'police madad', 'urgent madad',
+          'danger hai', 'attack hai', 'threat hai', 'help chahiye',
+          'police call', 'ambulance call', 'hospital call', 'emergency call'
+        ];
+        
+        // Check for keyword matches (case insensitive)
+        const detectedKeywords = results.filter((r: string) => {
+          const lowerResult = r.toLowerCase().trim();
+          return keywords.some(k => lowerResult.includes(k.toLowerCase()));
+        });
+        
+        if (detectedKeywords.length > 0) {
+          console.log('🚨 Emergency keywords detected:', detectedKeywords);
+          console.log('🚨 Full speech result:', results);
           triggerVoiceAlert();
+        } else {
+          console.log('🎤 No emergency keywords found in:', results);
         }
       };
+
+      Voice.onSpeechError = (error: any) => {
+        console.error('🎤 Voice recognition error:', error);
+        setIsListening(false);
+        
+        // Handle specific error types
+        if (error.error && error.error.code) {
+          console.log('🎤 Error code:', error.error.code);
+          
+          // Network error - retry quickly
+          if (error.error.code === 6 || error.error.code === 7) {
+            setTimeout(() => {
+              if (isVoiceEnabled) {
+                console.log('🔄 Restarting voice listening after network error...');
+                startVoiceListeningWithRetry();
+              }
+            }, 2000);
+            return;
+          }
+          
+          // Audio error - retry with delay
+          if (error.error.code === 8 || error.error.code === 9) {
+            setTimeout(() => {
+              if (isVoiceEnabled) {
+                console.log('🔄 Restarting voice listening after audio error...');
+                startVoiceListeningWithRetry();
+              }
+            }, 5000);
+            return;
+          }
+        }
+        
+        // Default retry for other errors
+        setTimeout(() => {
+          if (isVoiceEnabled) {
+            console.log('🔄 Restarting voice listening after error...');
+            startVoiceListeningWithRetry();
+          }
+        }, 3000);
+      };
+
       setIsVoiceEnabled(true);
+      console.log('✅ Voice detection setup completed');
+      
+      // Start initial listening with retry mechanism after ensuring state is updated
+      setTimeout(() => {
+        console.log('🎤 Starting automatic voice listening with retry mechanism...');
+        // Force start voice listening since we just enabled it
+        startVoiceListeningWithRetry(0, 3, true);
+      }, 2000); // Increased delay to ensure state is updated
+      
     } catch (error) {
-      console.log('Voice detection setup failed:', error);
+      console.error('❌ Voice detection setup failed:', error);
+      Alert.alert('Voice Detection Error', 'Failed to setup voice detection. Please check microphone permissions.');
+    }
+  };
+
+  // Automatic voice detection with retry mechanism
+  const startVoiceListeningWithRetry = async (retryCount = 0, maxRetries = 3, forceStart = false) => {
+    try {
+      console.log(`🎤 Starting voice listening (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+      console.log('🎤 Voice object:', !!Voice);
+      console.log('🎤 isVoiceEnabled:', isVoiceEnabled);
+      console.log('🎤 Voice module available:', Voice !== null);
+      console.log('🎤 Force start:', forceStart);
+      
+      if (!Voice) {
+        console.log('❌ Voice module not available');
+        return;
+      }
+      
+      if (!isVoiceEnabled && !forceStart) {
+        console.log('❌ Voice detection not enabled');
+        return;
+      }
+      
+      // Try multiple languages for better recognition
+      const languages = ['en-US', 'hi-IN', 'en-IN'];
+      let started = false;
+      
+      for (const lang of languages) {
+        try {
+          console.log(`🎤 Attempting to start with language: ${lang}`);
+          await Voice.start(lang);
+          console.log(`✅ Voice listening started with language: ${lang}`);
+          setIsListening(true);
+          started = true;
+          break;
+        } catch (langError) {
+          console.log(`⚠️ Failed to start with ${lang}:`, langError);
+        }
+      }
+      
+      if (!started) {
+        throw new Error('Failed to start voice recognition with any language');
+      }
+      
+    } catch (error) {
+      console.error(`❌ Failed to start voice listening (attempt ${retryCount + 1}):`, error);
+      setIsListening(false);
+      
+      // Retry with exponential backoff if we haven't exceeded max retries
+      if (retryCount < maxRetries) {
+        const delay = 5000; // 5 seconds delay
+        console.log(`🔄 Retrying voice listening in ${delay/1000} seconds... (${retryCount + 1}/${maxRetries})`);
+        
+        setTimeout(() => {
+          if (isVoiceEnabled || forceStart) {
+            startVoiceListeningWithRetry(retryCount + 1, maxRetries, forceStart);
+          }
+        }, delay);
+      } else {
+        console.error('❌ Voice listening failed after maximum retries. Giving up.');
+        // Still try to restart after a longer delay for background recovery
+        setTimeout(() => {
+          if (isVoiceEnabled) {
+            console.log('🔄 Background recovery: attempting voice listening restart...');
+            startVoiceListeningWithRetry(0, maxRetries, false);
+          }
+        }, 30000); // 30 seconds for background recovery
+      }
+    }
+  };
+
+  const stopVoiceListening = async () => {
+    try {
+      if (Voice) {
+        console.log('🎤 Stopping voice listening...');
+        await Voice.stop();
+        setIsListening(false);
+        console.log('✅ Voice listening stopped');
+      }
+    } catch (error) {
+      console.error('❌ Failed to stop voice listening:', error);
     }
   };
 
   const startBackgroundMonitoring = () => {
     try {
-      if (isVoiceEnabled && Voice) { 
-        Voice.start('en-US'); 
+      console.log('🔄 Starting background monitoring...');
+      
+      // Start voice listening if enabled
+      if (isVoiceEnabled) {
+        startVoiceListeningWithRetry();
       }
-      const timer = setInterval(() => {}, 30000);
+      
+      const timer = setInterval(() => {
+        // Periodic health check for voice detection
+        if (isVoiceEnabled && !isListening) {
+          console.log('🔄 Restarting voice listening (health check)...');
+          startVoiceListeningWithRetry();
+        } else if (isVoiceEnabled && isListening) {
+          console.log('✅ Voice listening is active (health check passed)');
+        }
+      }, 15000); // More frequent health checks
+      
       setBackgroundTimer(timer);
+      
       if (BackgroundTimer) {
         BackgroundTimer.start();
       }
+      
+      console.log('✅ Background monitoring started');
     } catch (error) {
-      console.log('Background monitoring setup failed:', error);
+      console.error('❌ Background monitoring setup failed:', error);
     }
   };
 
   const stopBackgroundMonitoring = () => {
     try {
+      console.log('🔄 Stopping background monitoring...');
+      
       if (backgroundTimer) clearInterval(backgroundTimer);
       if (shakeListener) shakeListener.remove();
+      
+      // Stop voice listening
       if (Voice) {
-        Voice.destroy().then(Voice.removeAllListeners);
+        stopVoiceListening();
+        Voice.destroy().then(() => {
+          Voice.removeAllListeners();
+          console.log('✅ Voice listeners removed');
+        });
       }
+      
       if (BackgroundTimer) {
         BackgroundTimer.stop();
       }
+      
+      console.log('✅ Background monitoring stopped');
     } catch (error) {
-      console.log('Background monitoring stop failed:', error);
+      console.error('❌ Background monitoring stop failed:', error);
     }
   };
 
   const triggerSOS = async (message?: string) => {
     const user = auth().currentUser;
     if (!user) return;
+    
+    console.log('🚨 triggerSOS called with message:', message);
+    console.log('🚨 Current alert state:', currentAlert);
+    console.log('🚨 Current alert ID:', currentAlert?.id);
+    console.log('🚨 Current alert status:', currentAlert?.status);
+    
+    // Check if there's already an active emergency
+    if (currentAlert && currentAlert.status === 'active') {
+      console.log('⚠️ Emergency already active - not triggering new SOS');
+      console.log('⚠️ Current alert ID:', currentAlert.id);
+      console.log('⚠️ Current alert status:', currentAlert.status);
+      return;
+    }
     
     console.log('🚨 SOS TRIGGERED - Starting emergency response sequence');
     
@@ -243,15 +611,16 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       setCurrentAlert({ ...alert, id: docRef.id });
       console.log('💾 Emergency alert saved to Firestore:', docRef.id);
       
+      // Send persistent SOS notification
+      const userName = user.displayName || user.email || 'Unknown User';
+      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+      
       // Skip audio recording entirely to avoid permission issues
       console.log('Audio recording disabled to prevent permission crashes');
       
-      // Trigger immediate SOS actions
-      await performSOSActions(location, message || 'SOS triggered manually');
-      
       Vibration.vibrate([0, 500, 200, 500, 200, 500]);
       
-      // Navigate to Emergency screen
+      // Navigate to Emergency screen - SOS actions will be triggered after countdown
       try { 
         navigate('Emergency'); 
       } catch (error) {
@@ -264,57 +633,154 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
+  // Check if SOS can be triggered (spam prevention)
+  const canTriggerSOS = (): boolean => {
+    // Allow SOS actions if there's an active emergency (countdown phase)
+    if (currentAlert && currentAlert.status === 'active') {
+      console.log('✅ SOS allowed - Active emergency in progress');
+      return true;
+    }
+    
+    const now = Date.now();
+    const timeSinceLastTrigger = now - lastSOSTrigger;
+    
+    if (timeSinceLastTrigger < sosCooldownPeriod) {
+      const remainingTime = Math.ceil((sosCooldownPeriod - timeSinceLastTrigger) / 1000);
+      console.log(`🚫 SOS cooldown active. ${remainingTime} seconds remaining.`);
+      Alert.alert(
+        'SOS Cooldown',
+        `Please wait ${remainingTime} seconds before triggering SOS again to prevent spam.`,
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
+    
+    return true;
+  };
+
   // New function to perform SOS actions using the SOS service
   const performSOSActions = async (location: any, message: string) => {
     try {
+      console.log('🚨 performSOSActions called with:', { location, message });
+      
+      // Check spam prevention
+      if (!canTriggerSOS()) {
+        console.log('🚫 SOS blocked by spam prevention');
+        return;
+      }
+
+      // Update last trigger time
+      setLastSOSTrigger(Date.now());
+      
       console.log('🚨 Performing SOS actions...');
       
-      // Get active contacts based on configuration
-      const contacts = getActiveContacts(SOS_CONFIG);
-      console.log(`📞 Found ${contacts.length} contacts to notify: ${contacts.map(contact => contact.name).join(', ')}`);
+      // Use user-selected contacts instead of hardcoded config
+      const callContacts = sosSettings.selectedCallContact ? [sosSettings.selectedCallContact] : [];
+      const smsContacts = sosSettings.selectedSMSContacts || [];
+      
+      console.log(`📞 Call contact: ${callContacts.length > 0 ? callContacts[0].name : 'None'}`);
+      console.log(`📱 SMS contacts: ${smsContacts.length} contacts`);
+      console.log('🔧 SOS Settings:', sosSettings);
+      console.log('🔧 Selected Call Contact:', sosSettings.selectedCallContact);
+      console.log('🔧 Selected SMS Contacts:', sosSettings.selectedSMSContacts);
+      console.log('🔧 Available Helplines:', sosSettings.availableHelplines);
+      console.log('🔧 Device Contacts:', sosSettings.deviceContacts);
+
+      // First, show a simple alert to confirm SOS is working
+      Alert.alert(
+        'SOS Test',
+        `SOS Actions triggered!\n\nCall Contact: ${callContacts.length > 0 ? callContacts[0].name : 'None'}\nSMS Contacts: ${smsContacts.length}\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
+        [{ text: 'OK' }]
+      );
 
       // Format the SOS message with location and timestamp
       const sosMessage = formatSOSMessage(SOS_CONFIG, location, new Date());
       console.log('📝 SOS Message:', sosMessage);
 
-      // Send SMS if enabled
-      if (SOS_CONFIG.SMS_CONFIG.enabled) {
+      // Filter out emergency helpline numbers (quick contacts) from SMS
+      const emergencyNumbers = ['100', '101', '102', '103', '108', '1091', '1098', '182', '112'];
+      const personalSMSContacts = smsContacts.filter(contact => {
+        const cleanPhone = String(contact.phone).replace(/[^\d+]/g, '');
+        const isEmergencyNumber = emergencyNumbers.some(emergencyNum => 
+          cleanPhone.includes(emergencyNum) || cleanPhone.endsWith(emergencyNum)
+        );
+        return !isEmergencyNumber;
+      });
+
+      // Send SMS if personal contacts are selected (exclude emergency helpline numbers)
+      if (personalSMSContacts.length > 0) {
         console.log('📱 Sending emergency SMS...');
-        const smsContacts = contacts.filter(contact => 
-          SOS_CONFIG.SMS_CONFIG.sendToPrimary && contact.isPrimary ||
-          SOS_CONFIG.SMS_CONFIG.sendToSecondary && !contact.isPrimary ||
-          SOS_CONFIG.SMS_CONFIG.sendToDebug && SOS_CONFIG.DEBUG_MODE
-        ).map(contact => ({
+        console.log(`📱 Filtered SMS contacts: ${personalSMSContacts.length} personal contacts (excluded ${smsContacts.length - personalSMSContacts.length} emergency numbers)`);
+        console.log('📱 SMS Contacts to send:', personalSMSContacts);
+        
+        const cleanedSMSContacts = personalSMSContacts.map(contact => ({
           ...contact,
           phone: String(contact.phone).replace(/[^\d+]/g, '') // Clean phone number (remove - and other chars)
         }));
         
-        const smsResults = await sosService.sendMultipleSMS(smsContacts, sosMessage);
+        console.log('📱 Cleaned SMS Contacts:', cleanedSMSContacts);
+        console.log('📱 SOS Service available:', !!sosService);
+        console.log('📱 Calling sosService.sendMultipleSMS...');
+        
+        const smsResults = await sosService.sendMultipleSMS(cleanedSMSContacts, sosMessage);
+        console.log('📱 SMS Results:', smsResults);
         const successfulSMS = smsResults.filter(result => result.success);
-        console.log(`✅ Sent ${successfulSMS.length}/${smsResults.length} successful SMS`);
+        console.log(`✅ Sent ${successfulSMS.length}/${smsResults.length} successful SMS to personal contacts`);
+        
+        // Show detailed results
+        smsResults.forEach((result, index) => {
+          if (result.success) {
+            console.log(`✅ SMS ${index + 1}: Successfully sent to ${result.contact.name}`);
+          } else {
+            console.log(`❌ SMS ${index + 1}: Failed to send to ${result.contact.name} - ${result.error}`);
+          }
+        });
+      } else {
+        console.log('📱 No personal contacts selected for SMS (only emergency numbers)');
+        console.log('📱 Original SMS contacts:', smsContacts);
+        console.log('📱 Personal SMS contacts after filtering:', personalSMSContacts);
       }
 
-      // Make phone calls if enabled
-      if (SOS_CONFIG.CALL_CONFIG.enabled) {
+      // Send alerts to guardians (from Guardian Dashboard system)
+      await sendAlertToGuardians(location, message);
+
+      // Make phone calls if contact is selected
+      if (callContacts.length > 0) {
         console.log('📞 Making emergency phone calls...');
-        const callContacts = contacts.filter(contact => 
-          SOS_CONFIG.CALL_CONFIG.callPrimary && contact.isPrimary ||
-          SOS_CONFIG.CALL_CONFIG.callSecondary && !contact.isPrimary ||
-          SOS_CONFIG.CALL_CONFIG.callDebug && SOS_CONFIG.DEBUG_MODE
-        ).map(contact => ({
+        console.log('📞 Call Contacts to call:', callContacts);
+        
+        const cleanedCallContacts = callContacts.map(contact => ({
           ...contact,
           phone: String(contact.phone).replace(/[^\d+]/g, '') // Clean phone number (remove - and other chars)
         }));
         
-        const callResults = await sosService.makeMultipleCalls(callContacts);
+        console.log('📞 Cleaned Call Contacts:', cleanedCallContacts);
+        console.log('📞 SOS Service available:', !!sosService);
+        console.log('📞 Calling sosService.makeMultipleCalls...');
+        
+        const callResults = await sosService.makeMultipleCalls(cleanedCallContacts);
+        console.log('📞 Call Results:', callResults);
         const successfulCalls = callResults.filter(result => result.success);
         console.log(`✅ Made ${successfulCalls.length}/${callResults.length} successful calls`);
+        
+        // Show detailed results
+        callResults.forEach((result, index) => {
+          if (result.success) {
+            console.log(`✅ Call ${index + 1}: Successfully called ${result.contact.name}`);
+          } else {
+            console.log(`❌ Call ${index + 1}: Failed to call ${result.contact.name} - ${result.error}`);
+          }
+        });
+      } else {
+        console.log('📞 No call contacts selected');
+        console.log('📞 Call contacts array:', callContacts);
       }
 
       // Show success message
+      const totalPersonalContacts = personalSMSContacts.length + callContacts.length;
       Alert.alert(
         'SOS Activated',
-        `Emergency alert sent to ${contacts.length} contacts.\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
+        `Emergency alert sent to ${totalPersonalContacts} personal contacts and guardians.\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
         [{ text: 'OK' }]
       );
 
@@ -327,53 +793,195 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
   const triggerShakeAlert = async () => {
     const user = auth().currentUser;
     if (!user) return;
+    
+    console.log('🔄 SHAKE ALERT TRIGGERED - Starting emergency response sequence');
+    
+    // Get current location with better error handling using SafeLocationService
+    let location = { latitude: 0, longitude: 0, accuracy: 0 };
+    try {
+      const locationService = SafeLocationService.getInstance();
+
+      const currentLocation = await locationService.getCurrentLocation();
+      if (currentLocation) {
+        location = currentLocation;
+      } else {
+        const fallbackLocation = await locationService.getLocationFallback();
+        if (fallbackLocation) {
+          location = fallbackLocation;
+        } else {
+          const cachedLocation = locationService.getCachedLocation();
+          if (cachedLocation) {
+            location = cachedLocation;
+          }
+        }
+      }
+      console.log('📍 Location obtained:', location);
+    } catch (error) {
+      console.log('SafeLocationService error, trying Firebase location:', error);
+      try {
+        const userDoc = await firestore().collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          if (userData?.currentLocation) {
+            location = userData.currentLocation;
+          }
+        }
+      } catch (firebaseError) {
+        console.log('Firebase location error:', firebaseError);
+      }
+    }
+
     const alert: Omit<EmergencyAlert, 'id'> = {
       userId: user.uid,
       type: 'shake',
       status: 'active',
-      location: { latitude: 0, longitude: 0, accuracy: 0 },
+      location,
       timestamp: new Date(),
       message: 'Emergency detected via shake gesture',
       guardianResponses: [],
     };
+    
+    try {
     const docRef = await firestore().collection('emergencyAlerts').add(alert);
     setCurrentAlert({ ...alert, id: docRef.id });
-    
-    // Skip audio recording to avoid permission issues
+      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+      
+      // Send persistent SOS notification
+      const userName = user.displayName || user.email || 'Unknown User';
+      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+      
+      // Skip audio recording entirely to avoid permission issues
     console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-    try { navigate('Emergency'); } catch {}
-    await notifyQuickContactsSMS('Emergency detected via shake gesture. I need help.');
+      
+      // Navigate to Emergency screen - SOS actions will be triggered after countdown
+      try { 
+        navigate('Emergency'); 
+      } catch (error) {
+        console.log('Navigation error:', error);
+      }
+      
+    } catch (error) {
+      console.error('Error creating emergency alert:', error);
+      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
+    }
   };
 
   const triggerVoiceAlert = async () => {
     const user = auth().currentUser;
     if (!user) return;
+    
+    console.log('🎤 VOICE ALERT TRIGGERED - Starting emergency response sequence');
+    
+    // Get current location with better error handling using SafeLocationService
+    let location = { latitude: 0, longitude: 0, accuracy: 0 };
+    try {
+      const locationService = SafeLocationService.getInstance();
+
+      const currentLocation = await locationService.getCurrentLocation();
+      if (currentLocation) {
+        location = currentLocation;
+      } else {
+        const fallbackLocation = await locationService.getLocationFallback();
+        if (fallbackLocation) {
+          location = fallbackLocation;
+        } else {
+          const cachedLocation = locationService.getCachedLocation();
+          if (cachedLocation) {
+            location = cachedLocation;
+          }
+        }
+      }
+      console.log('📍 Location obtained:', location);
+    } catch (error) {
+      console.log('SafeLocationService error, trying Firebase location:', error);
+      try {
+        const userDoc = await firestore().collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          if (userData?.currentLocation) {
+            location = userData.currentLocation;
+          }
+        }
+      } catch (firebaseError) {
+        console.log('Firebase location error:', firebaseError);
+      }
+    }
+
     const alert: Omit<EmergencyAlert, 'id'> = {
       userId: user.uid,
       type: 'voice',
       status: 'active',
-      location: { latitude: 0, longitude: 0, accuracy: 0 },
+      location,
       timestamp: new Date(),
       message: 'Emergency detected via voice command',
       guardianResponses: [],
     };
+    
+    try {
     const docRef = await firestore().collection('emergencyAlerts').add(alert);
     setCurrentAlert({ ...alert, id: docRef.id });
-    
-    // Skip audio recording to avoid permission issues
+      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+      
+      // Send persistent SOS notification
+      const userName = user.displayName || user.email || 'Unknown User';
+      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+      
+      // Skip audio recording entirely to avoid permission issues
     console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-    try { navigate('Emergency'); } catch {}
-    await notifyQuickContactsSMS('Emergency detected via voice command. I need help.');
+      
+      // Navigate to Emergency screen - SOS actions will be triggered after countdown
+      try { 
+        navigate('Emergency'); 
+      } catch (error) {
+        console.log('Navigation error:', error);
+      }
+      
+    } catch (error) {
+      console.error('Error creating emergency alert:', error);
+      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
+    }
   };
 
   const resolveEmergency = async (alertId: string, reason?: string) => {
-    await firestore().collection('emergencyAlerts').doc(alertId).update({ status: 'resolved', resolvedAt: new Date(), resolvedBy: auth().currentUser?.uid, resolutionReason: reason });
-    if (isRecording) await stopAudioRecording();
+    try {
+      console.log('🔄 Resolving emergency alert:', alertId);
+      
+      const user = auth().currentUser;
+      if (!user) {
+        throw new Error('User not authenticated');
+      }
+
+      await firestore()
+        .collection('emergencyAlerts')
+        .doc(alertId)
+        .update({ 
+          status: 'resolved', 
+          resolvedAt: new Date(), 
+          resolvedBy: user.uid, 
+          resolutionReason: reason || 'Resolved by user'
+        });
+      
+      console.log('✅ Emergency alert resolved successfully');
+      
+      // Stop audio recording if active
+      if (isRecording) {
+        await stopAudioRecording();
+      }
+      
+      // Clear current alert
     setCurrentAlert(null);
+      
+      // Cancel SOS notification
+      pushNotificationService.cancelSOSNotification(alertId);
+      
+    } catch (error) {
+      console.error('❌ Error resolving emergency alert:', error);
+      throw error;
+    }
   };
 
   const loadAlertHistory = async () => {
@@ -677,6 +1285,95 @@ Sent from SafeHer app.`;
     return () => stopBackgroundMonitoring();
   }, []);
 
+  const sendAlertToGuardians = async (location: any, message: string): Promise<void> => {
+    try {
+      const user = auth().currentUser;
+      if (!user) return;
+
+      console.log('👥 Sending alerts to guardians...');
+
+      const userDoc = await firestore().collection('users').doc(user.uid).get();
+      if (!userDoc.exists) {
+        console.log('User document not found');
+        return;
+      }
+
+      const userData = userDoc.data();
+      const userName = userData?.displayName || 'User';
+      
+      // Format location string
+      const locationString = location.latitude && location.longitude 
+        ? `📍 Location: ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
+        : '📍 Location: Not available';
+      
+      const mapLink = location.latitude && location.longitude 
+        ? `🗺️ Map: https://maps.google.com/?q=${location.latitude},${location.longitude}`
+        : '';
+      
+      const timeString = `⏰ Time: ${new Date().toLocaleString()}`;
+
+      // Send alerts to guardian emails (disabled to prevent opening email app)
+      if (userData?.guardianEmails && userData.guardianEmails.length > 0) {
+        console.log(`📧 Email alerts disabled - would have sent to ${userData.guardianEmails.length} guardians`);
+        console.log('📧 Guardian emails:', userData.guardianEmails);
+        
+        // Email functionality disabled to prevent opening email app
+        // The guardian alert will be sent via push notifications instead
+      } else {
+        console.log('📧 No guardian emails configured');
+      }
+
+      // Send push notifications to guardians (if they have the app)
+      if (userData?.guardianEmails && userData.guardianEmails.length > 0) {
+        console.log('📱 Sending push notifications to guardians...');
+        
+        // Get guardian user IDs from emails
+        const guardianEmails = userData.guardianEmails;
+        const guardianUsersSnapshot = await firestore()
+          .collection('users')
+          .where('email', 'in', guardianEmails)
+          .get();
+        
+        const guardianTokens = guardianUsersSnapshot.docs
+          .map(doc => doc.data().fcmToken)
+          .filter(token => token);
+        
+        if (guardianTokens.length > 0) {
+          try {
+            await pushNotificationService.sendEmergencyAlertToGuardians(
+              guardianTokens,
+              userName,
+              location,
+              message
+            );
+            console.log(`✅ Push notifications sent to ${guardianTokens.length} guardians`);
+          } catch (pushError) {
+            console.error('❌ Failed to send push notifications:', pushError);
+          }
+        } else {
+          console.log('📱 No guardian FCM tokens found');
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Error sending alerts to guardians:', error);
+    }
+  };
+
+  // Test function to verify SOS is working
+  const testSOS = () => {
+    console.log('🧪 Testing SOS functionality...');
+    console.log('🧪 Current SOS Settings:', sosSettings);
+    console.log('🧪 Call Contacts:', sosSettings.selectedCallContact);
+    console.log('🧪 SMS Contacts:', sosSettings.selectedSMSContacts);
+    
+    Alert.alert(
+      'SOS Test',
+      `SOS Test Successful!\n\nCall Contact: ${sosSettings.selectedCallContact?.name || 'None'}\nSMS Contacts: ${sosSettings.selectedSMSContacts.length}\n\nEmergencyContext is working!`,
+      [{ text: 'OK' }]
+    );
+  };
+
   const value: EmergencyContextType = {
     currentAlert,
     alertHistory,
@@ -694,7 +1391,9 @@ Sent from SafeHer app.`;
     triggerVoiceAlert,
     resolveEmergency,
     loadAlertHistory,
-    sendAlertToGuardians: async () => {},
+    sendAlertToGuardians,
+    performSOSActions,
+    updateSOSSettings,
     startAudioRecording,
     stopAudioRecording,
     startVideoRecording,

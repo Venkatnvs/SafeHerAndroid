@@ -31,7 +31,7 @@ const { width, height } = Dimensions.get('window');
 const HomeScreen = () => {
   const navigation = useNavigation();
   const { user } = useAuth();
-  const { triggerSOS, currentAlert } = useEmergency();
+  const { triggerSOS, currentAlert, isVoiceEnabled, isListening } = useEmergency();
   const { 
     currentLocation, 
     safeZones, 
@@ -172,14 +172,31 @@ const HomeScreen = () => {
   }, []);
 
   const handleSOSPress = async () => {
-    if (currentAlert) {
+    console.log('🔴 SOS Button Pressed');
+    console.log('🔴 Current Alert Status:', currentAlert);
+    console.log('🔴 Current Alert ID:', currentAlert?.id);
+    console.log('🔴 Current Alert Status:', currentAlert?.status);
+    
+    // Add a small delay to ensure state is properly updated
+    await new Promise((resolve: any) => setTimeout(resolve as any, 100));
+    
+    if (currentAlert && currentAlert.status === 'active') {
+      console.log('🔴 Emergency already active - navigating to Emergency screen');
+      console.log('🔴 Alert details:', {
+        id: currentAlert.id,
+        status: currentAlert.status,
+        timestamp: currentAlert.timestamp
+      });
       navigation.navigate('Emergency' as never);
       return;
     }
+    
+    console.log('🔴 No active emergency - triggering new SOS');
     try {
       await triggerSOS('One-tap SOS triggered from home screen');
       navigation.navigate('Emergency' as never);
     } catch (error) {
+      console.error('🔴 Error triggering SOS:', error);
       Alert.alert('Error', 'Failed to trigger SOS. Please try again.');
     }
   };
@@ -487,7 +504,29 @@ const HomeScreen = () => {
           </LinearGradient>
         </View>
 
-        {/* Indian Emergency Numbers */}
+        {/* Voice Detection Status */}
+        <View style={styles.locationSection}>
+          <LinearGradient
+            colors={isVoiceEnabled ? (isListening ? ['#FF9800', '#F57C00'] : ['#4CAF50', '#388E3C']) : ['#9E9E9E', '#757575']}
+            style={styles.locationCard}
+          >
+            <Icon 
+              name={isVoiceEnabled ? (isListening ? "microphone" : "microphone-off") : "microphone-off"} 
+              size={24} 
+              color="white" 
+            />
+            <Text style={styles.locationText}>
+              {isVoiceEnabled 
+                ? (isListening 
+                  ? 'Voice detection active • Say "help" or "emergency"'
+                  : 'Voice detection enabled • Starting...'
+                )
+                : 'Voice detection disabled • Enable in Profile settings'
+              }
+            </Text>
+          </LinearGradient>
+          
+        </View>
         <View style={styles.emergencyNumbersSection}>
           <Text style={styles.sectionTitle}>Indian Emergency Numbers</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>

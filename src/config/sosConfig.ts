@@ -60,22 +60,22 @@ export const DEFAULT_SOS_CONFIG: SOSConfig = {
   PRIMARY_CONTACTS: [
     {
       name: 'Police',
-      phone: '+91-8050031756',
+      phone: '100',
       isPrimary: true,
       isEmergency: true,
     },
-    // {
-    //   name: 'Medical Emergency',
-    //   phone: '102',
-    //   isPrimary: true,
-    //   isEmergency: true,
-    // },
-    // {
-    //   name: 'Women Helpline',
-    //   phone: '1091',
-    //   isPrimary: true,
-    //   isEmergency: true,
-    // },
+    {
+      name: 'Medical Emergency',
+      phone: '102',
+      isPrimary: true,
+      isEmergency: true,
+    },
+    {
+      name: 'Women Helpline',
+      phone: '1091',
+      isPrimary: true,
+      isEmergency: true,
+    },
   ],
   
   SECONDARY_CONTACTS: [
@@ -174,7 +174,12 @@ export const formatSOSMessage = (
   if (config.SMS_CONFIG.message.includeLocation && location) {
     const locationText = location.address || 
       `Lat: ${location.latitude.toFixed(6)}, Lng: ${location.longitude.toFixed(6)}`;
-    message = message.replace('{LOCATION}', locationText);
+    
+    // Add Google Maps URL
+    const googleMapsUrl = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
+    const locationWithMap = `${locationText}\n🗺️ Map: ${googleMapsUrl}`;
+    
+    message = message.replace('{LOCATION}', locationWithMap);
   } else {
     message = message.replace('{LOCATION}', 'Location not available');
   }

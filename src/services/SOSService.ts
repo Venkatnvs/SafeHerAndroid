@@ -164,14 +164,31 @@ export class SOSService {
       const smsToUrl = `smsto:${phoneNumber}`; // opens composer
       try {
         console.log('Opening system SMS composer via smsto:');
-        await Linking.openURL(`${smsToUrl}?body=${encodeURIComponent(smsText)}`);
-        return { success: true, contact };
+        const smsUrl = `${smsToUrl}?body=${encodeURIComponent(smsText)}`;
+        console.log('SMS URL:', smsUrl);
+        
+        // Check if the URL can be opened
+        const canOpen = await Linking.canOpenURL(smsUrl);
+        if (canOpen) {
+          await Linking.openURL(smsUrl);
+          return { success: true, contact };
+        } else {
+          console.log('Cannot open SMS URL, trying alternative method');
+          throw new Error('Cannot open SMS URL');
+        }
       } catch (error) {
         console.log('smsto: composer failed, trying sms: scheme:', error);
         try {
           const smsUrl = `sms:${phoneNumber}?body=${encodeURIComponent(smsText)}`;
-          await Linking.openURL(smsUrl);
-          return { success: true, contact };
+          console.log('Alternative SMS URL:', smsUrl);
+          
+          const canOpen = await Linking.canOpenURL(smsUrl);
+          if (canOpen) {
+            await Linking.openURL(smsUrl);
+            return { success: true, contact };
+          } else {
+            throw new Error('Cannot open alternative SMS URL');
+          }
         } catch (error2) {
           console.log('sms: scheme failed, trying Communications library:', error2);
         }
@@ -188,11 +205,49 @@ export class SOSService {
         }
       }
 
-      // If all methods fail
+      // Try simple SMS URL without body parameter (most compatible)
+      try {
+        console.log('Trying simple SMS URL without body');
+        const simpleSmsUrl = `sms:${phoneNumber}`;
+        const canOpen = await Linking.canOpenURL(simpleSmsUrl);
+        if (canOpen) {
+          await Linking.openURL(simpleSmsUrl);
+          // Show alert with message to copy
+          Alert.alert(
+            'SMS Composer Opened',
+            `SMS composer opened for ${contact.name}. Please paste this message:\n\n${smsText}`,
+            [{ text: 'OK' }]
+          );
+          return { success: true, contact };
+        }
+      } catch (simpleSmsError) {
+        console.log('Simple SMS URL failed:', simpleSmsError);
+      }
+
+      // If all methods fail, show alert with message for user to copy
+      console.log('All SMS methods failed, showing alert with message');
+      Alert.alert(
+        `SMS to ${contact.name}`,
+        `Unable to send SMS automatically. Please copy this message and send it manually to ${contact.phone}:\n\n${smsText}`,
+        [
+          { text: 'Copy Message', onPress: () => {
+            // Copy to clipboard if available
+            try {
+              const { Clipboard } = require('@react-native-clipboard/clipboard');
+              Clipboard.setString(smsText);
+              Alert.alert('Copied', 'Message copied to clipboard');
+            } catch (clipboardError) {
+              console.log('Clipboard not available:', clipboardError);
+            }
+          }},
+          { text: 'OK' }
+        ]
+      );
+      
       return { 
         success: false, 
         contact, 
-        error: 'All SMS methods failed' 
+        error: 'All SMS methods failed - manual sending required' 
       };
 
     } catch (error) {
