@@ -543,13 +543,15 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const triggerSOS = async (message?: string) => {
+    // Allow SOS to work even without authentication (offline mode)
     const user = auth().currentUser;
-    if (!user) return;
+    const userId = user?.uid || 'offline_user';
     
     console.log('🚨 triggerSOS called with message:', message);
     console.log('🚨 Current alert state:', currentAlert);
     console.log('🚨 Current alert ID:', currentAlert?.id);
     console.log('🚨 Current alert status:', currentAlert?.status);
+    console.log('🚨 User authenticated:', !!user);
     
     // Check if there's already an active emergency
     if (currentAlert && currentAlert.status === 'active') {
@@ -561,7 +563,7 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
     
     console.log('🚨 SOS TRIGGERED - Starting emergency response sequence');
     
-    // Get current location with better error handling using SafeLocationService
+    // Get current location with better error handling using SafeLocationService (works offline)
     let location = { latitude: 0, longitude: 0, accuracy: 0 };
     try {
       const locationService = SafeLocationService.getInstance();
@@ -582,22 +584,26 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
       console.log('📍 Location obtained:', location);
     } catch (error) {
-      console.log('SafeLocationService error, trying Firebase location:', error);
-      try {
-        const userDoc = await firestore().collection('users').doc(user.uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          if (userData?.currentLocation) {
-            location = userData.currentLocation;
+      console.log('SafeLocationService error, trying Firebase location (optional):', error);
+      // Only try Firebase if user is authenticated and we have internet
+      if (user) {
+        try {
+          const userDoc = await firestore().collection('users').doc(user.uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            if (userData?.currentLocation) {
+              location = userData.currentLocation;
+            }
           }
+        } catch (firebaseError) {
+          console.log('Firebase location unavailable (offline mode):', firebaseError);
+          // Continue with SOS even if Firebase fails
         }
-      } catch (firebaseError) {
-        console.error('Error getting location from Firebase:', firebaseError);
       }
     }
 
     const alert: Omit<EmergencyAlert, 'id'> = {
-      userId: user.uid,
+      userId: userId,
       type: 'sos',
       status: 'active',
       location,
@@ -606,31 +612,45 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       guardianResponses: [],
     };
     
-    try {
-      const docRef = await firestore().collection('emergencyAlerts').add(alert);
-      setCurrentAlert({ ...alert, id: docRef.id });
-      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
-      
-      // Send persistent SOS notification
-      const userName = user.displayName || user.email || 'Unknown User';
-      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
-      
-      // Skip audio recording entirely to avoid permission issues
-      console.log('Audio recording disabled to prevent permission crashes');
-      
-      Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-      
-      // Navigate to Emergency screen - SOS actions will be triggered after countdown
-      try { 
-        navigate('Emergency'); 
-      } catch (error) {
-        console.log('Navigation error:', error);
+    // Create local alert immediately (works offline)
+    const localAlertId = `local_${Date.now()}`;
+    setCurrentAlert({ ...alert, id: localAlertId });
+    console.log('💾 Emergency alert created locally:', localAlertId);
+    
+    // Try to save to Firebase (optional, won't block SOS if it fails)
+    if (user) {
+      try {
+        const docRef = await firestore().collection('emergencyAlerts').add(alert);
+        setCurrentAlert({ ...alert, id: docRef.id });
+        console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+        
+        // Send persistent SOS notification (optional)
+        try {
+          const userName = user.displayName || user.email || 'Unknown User';
+          pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+        } catch (notifError) {
+          console.log('Push notification failed (offline mode):', notifError);
+        }
+      } catch (firebaseError) {
+        console.log('Firebase save failed (offline mode) - SOS will still work:', firebaseError);
+        // Keep using local alert ID
       }
-      
-    } catch (error) {
-      console.error('Error creating emergency alert:', error);
-      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
     }
+    
+    // Skip audio recording entirely to avoid permission issues
+    console.log('Audio recording disabled to prevent permission crashes');
+    
+    Vibration.vibrate([0, 500, 200, 500, 200, 500]);
+    
+    // Navigate to Emergency screen using NavigationService
+    setTimeout(() => {
+      try {
+        navigate('Emergency');
+        console.log('✅ Navigated to Emergency screen (triggerSOS)');
+      } catch (error) {
+        console.log('Navigation error (will be handled by HomeScreen):', error);
+      }
+    }, 100);
   };
 
   // Check if SOS can be triggered (spam prevention)
@@ -686,12 +706,12 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       console.log('🔧 Available Helplines:', sosSettings.availableHelplines);
       console.log('🔧 Device Contacts:', sosSettings.deviceContacts);
 
-      // First, show a simple alert to confirm SOS is working
-      Alert.alert(
-        'SOS Test',
-        `SOS Actions triggered!\n\nCall Contact: ${callContacts.length > 0 ? callContacts[0].name : 'None'}\nSMS Contacts: ${smsContacts.length}\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
-        [{ text: 'OK' }]
-      );
+      // Removed test alert - SOS should work silently in background
+      // Alert.alert(
+      //   'SOS Test',
+      //   `SOS Actions triggered!\n\nCall Contact: ${callContacts.length > 0 ? callContacts[0].name : 'None'}\nSMS Contacts: ${smsContacts.length}\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
+      //   [{ text: 'OK' }]
+      // );
 
       // Format the SOS message with location and timestamp
       const sosMessage = formatSOSMessage(SOS_CONFIG, location, new Date());
@@ -741,8 +761,13 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
         console.log('📱 Personal SMS contacts after filtering:', personalSMSContacts);
       }
 
-      // Send alerts to guardians (from Guardian Dashboard system)
-      await sendAlertToGuardians(location, message);
+      // Send alerts to guardians (from Guardian Dashboard system) - optional, won't block SOS if offline
+      try {
+        await sendAlertToGuardians(location, message);
+      } catch (guardianError) {
+        console.log('Guardian alerts failed (offline mode) - SOS calls/SMS still work:', guardianError);
+        // Continue - calls and SMS are more important and work offline
+      }
 
       // Make phone calls if contact is selected
       if (callContacts.length > 0) {
@@ -776,27 +801,58 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
         console.log('📞 Call contacts array:', callContacts);
       }
 
-      // Show success message
+      // Show success message (only if we have contacts)
       const totalPersonalContacts = personalSMSContacts.length + callContacts.length;
-      Alert.alert(
-        'SOS Activated',
-        `Emergency alert sent to ${totalPersonalContacts} personal contacts and guardians.\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
-        [{ text: 'OK' }]
-      );
+      if (totalPersonalContacts > 0) {
+        console.log(`✅ SOS activated - ${totalPersonalContacts} contacts notified`);
+        // Don't show alert - let calls/SMS happen silently
+        // Alert.alert(
+        //   'SOS Activated',
+        //   `Emergency alert sent to ${totalPersonalContacts} personal contacts and guardians.\n\nLocation: ${location.latitude ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Not available'}`,
+        //   [{ text: 'OK' }]
+        // );
+      } else {
+        console.log('⚠️ No contacts configured for SOS - making emergency call as fallback');
+        // Make emergency call even if no contacts configured
+        try {
+          await sosService.makePhoneCall({ 
+            name: 'Emergency Services', 
+            phone: '100', 
+            isPrimary: true, 
+            isEmergency: true 
+          });
+        } catch (fallbackError) {
+          console.error('❌ Emergency call fallback also failed:', fallbackError);
+        }
+      }
 
     } catch (error) {
       console.error('❌ Error performing SOS actions:', error);
-      Alert.alert('SOS Error', 'Some emergency actions failed. Please try calling emergency services manually.');
+      // Try emergency call as last resort
+      try {
+        console.log('🔄 Attempting emergency call as last resort...');
+        await sosService.makePhoneCall({ 
+          name: 'Emergency Services', 
+          phone: '100', 
+          isPrimary: true, 
+          isEmergency: true 
+        });
+      } catch (fallbackError) {
+        console.error('❌ Emergency call fallback failed:', fallbackError);
+        // Don't show alert - let user manually call if needed
+        // Alert.alert('SOS Error', 'Some emergency actions failed. Please try calling emergency services manually.');
+      }
     }
   };
 
   const triggerShakeAlert = async () => {
+    // Allow SOS to work even without authentication (offline mode)
     const user = auth().currentUser;
-    if (!user) return;
+    const userId = user?.uid || 'offline_user';
     
     console.log('🔄 SHAKE ALERT TRIGGERED - Starting emergency response sequence');
     
-    // Get current location with better error handling using SafeLocationService
+    // Get current location with better error handling using SafeLocationService (works offline)
     let location = { latitude: 0, longitude: 0, accuracy: 0 };
     try {
       const locationService = SafeLocationService.getInstance();
@@ -817,22 +873,26 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
       console.log('📍 Location obtained:', location);
     } catch (error) {
-      console.log('SafeLocationService error, trying Firebase location:', error);
-      try {
-        const userDoc = await firestore().collection('users').doc(user.uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          if (userData?.currentLocation) {
-            location = userData.currentLocation;
+      console.log('SafeLocationService error, trying Firebase location (optional):', error);
+      // Only try Firebase if user is authenticated and we have internet
+      if (user) {
+        try {
+          const userDoc = await firestore().collection('users').doc(user.uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            if (userData?.currentLocation) {
+              location = userData.currentLocation;
+            }
           }
+        } catch (firebaseError) {
+          console.log('Firebase location unavailable (offline mode):', firebaseError);
+          // Continue with SOS even if Firebase fails
         }
-      } catch (firebaseError) {
-        console.log('Firebase location error:', firebaseError);
       }
     }
 
     const alert: Omit<EmergencyAlert, 'id'> = {
-      userId: user.uid,
+      userId: userId,
       type: 'shake',
       status: 'active',
       location,
@@ -841,40 +901,55 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       guardianResponses: [],
     };
     
-    try {
-    const docRef = await firestore().collection('emergencyAlerts').add(alert);
-    setCurrentAlert({ ...alert, id: docRef.id });
-      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
-      
-      // Send persistent SOS notification
-      const userName = user.displayName || user.email || 'Unknown User';
-      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
-      
-      // Skip audio recording entirely to avoid permission issues
+    // Create local alert immediately (works offline)
+    const localAlertId = `local_${Date.now()}`;
+    setCurrentAlert({ ...alert, id: localAlertId });
+    console.log('💾 Emergency alert created locally:', localAlertId);
+    
+    // Try to save to Firebase (optional, won't block SOS if it fails)
+    if (user) {
+      try {
+        const docRef = await firestore().collection('emergencyAlerts').add(alert);
+        setCurrentAlert({ ...alert, id: docRef.id });
+        console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+        
+        // Send persistent SOS notification (optional)
+        try {
+          const userName = user.displayName || user.email || 'Unknown User';
+          pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+        } catch (notifError) {
+          console.log('Push notification failed (offline mode):', notifError);
+        }
+      } catch (firebaseError) {
+        console.log('Firebase save failed (offline mode) - SOS will still work:', firebaseError);
+        // Keep using local alert ID
+      }
+    }
+    
+    // Skip audio recording entirely to avoid permission issues
     console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-      
-      // Navigate to Emergency screen - SOS actions will be triggered after countdown
-      try { 
-        navigate('Emergency'); 
+    
+    // Navigate to Emergency screen using NavigationService
+    setTimeout(() => {
+      try {
+        navigate('Emergency');
+        console.log('✅ Navigated to Emergency screen (shake)');
       } catch (error) {
-        console.log('Navigation error:', error);
+        console.log('Navigation error (shake):', error);
       }
-      
-    } catch (error) {
-      console.error('Error creating emergency alert:', error);
-      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
-    }
+    }, 100);
   };
 
   const triggerVoiceAlert = async () => {
+    // Allow SOS to work even without authentication (offline mode)
     const user = auth().currentUser;
-    if (!user) return;
+    const userId = user?.uid || 'offline_user';
     
     console.log('🎤 VOICE ALERT TRIGGERED - Starting emergency response sequence');
     
-    // Get current location with better error handling using SafeLocationService
+    // Get current location with better error handling using SafeLocationService (works offline)
     let location = { latitude: 0, longitude: 0, accuracy: 0 };
     try {
       const locationService = SafeLocationService.getInstance();
@@ -895,22 +970,26 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
       console.log('📍 Location obtained:', location);
     } catch (error) {
-      console.log('SafeLocationService error, trying Firebase location:', error);
-      try {
-        const userDoc = await firestore().collection('users').doc(user.uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          if (userData?.currentLocation) {
-            location = userData.currentLocation;
+      console.log('SafeLocationService error, trying Firebase location (optional):', error);
+      // Only try Firebase if user is authenticated and we have internet
+      if (user) {
+        try {
+          const userDoc = await firestore().collection('users').doc(user.uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            if (userData?.currentLocation) {
+              location = userData.currentLocation;
+            }
           }
+        } catch (firebaseError) {
+          console.log('Firebase location unavailable (offline mode):', firebaseError);
+          // Continue with SOS even if Firebase fails
         }
-      } catch (firebaseError) {
-        console.log('Firebase location error:', firebaseError);
       }
     }
 
     const alert: Omit<EmergencyAlert, 'id'> = {
-      userId: user.uid,
+      userId: userId,
       type: 'voice',
       status: 'active',
       location,
@@ -919,31 +998,45 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       guardianResponses: [],
     };
     
-    try {
-    const docRef = await firestore().collection('emergencyAlerts').add(alert);
-    setCurrentAlert({ ...alert, id: docRef.id });
-      console.log('💾 Emergency alert saved to Firestore:', docRef.id);
-      
-      // Send persistent SOS notification
-      const userName = user.displayName || user.email || 'Unknown User';
-      pushNotificationService.sendSOSNotification(docRef.id, userName, location);
-      
-      // Skip audio recording entirely to avoid permission issues
+    // Create local alert immediately (works offline)
+    const localAlertId = `local_${Date.now()}`;
+    setCurrentAlert({ ...alert, id: localAlertId });
+    console.log('💾 Emergency alert created locally:', localAlertId);
+    
+    // Try to save to Firebase (optional, won't block SOS if it fails)
+    if (user) {
+      try {
+        const docRef = await firestore().collection('emergencyAlerts').add(alert);
+        setCurrentAlert({ ...alert, id: docRef.id });
+        console.log('💾 Emergency alert saved to Firestore:', docRef.id);
+        
+        // Send persistent SOS notification (optional)
+        try {
+          const userName = user.displayName || user.email || 'Unknown User';
+          pushNotificationService.sendSOSNotification(docRef.id, userName, location);
+        } catch (notifError) {
+          console.log('Push notification failed (offline mode):', notifError);
+        }
+      } catch (firebaseError) {
+        console.log('Firebase save failed (offline mode) - SOS will still work:', firebaseError);
+        // Keep using local alert ID
+      }
+    }
+    
+    // Skip audio recording entirely to avoid permission issues
     console.log('Audio recording disabled to prevent permission crashes');
     
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-      
-      // Navigate to Emergency screen - SOS actions will be triggered after countdown
-      try { 
-        navigate('Emergency'); 
+    
+    // Navigate to Emergency screen using NavigationService
+    setTimeout(() => {
+      try {
+        navigate('Emergency');
+        console.log('✅ Navigated to Emergency screen (voice)');
       } catch (error) {
-        console.log('Navigation error:', error);
+        console.log('Navigation error (voice):', error);
       }
-      
-    } catch (error) {
-      console.error('Error creating emergency alert:', error);
-      Alert.alert('Error', 'Failed to create emergency alert. Please try again.');
-    }
+    }, 100);
   };
 
   const resolveEmergency = async (alertId: string, reason?: string) => {
@@ -951,36 +1044,49 @@ export const EmergencyProvider: React.FC<{ children: ReactNode }> = ({ children 
       console.log('🔄 Resolving emergency alert:', alertId);
       
       const user = auth().currentUser;
-      if (!user) {
-        throw new Error('User not authenticated');
-      }
-
-      await firestore()
-        .collection('emergencyAlerts')
-        .doc(alertId)
-        .update({ 
-          status: 'resolved', 
-          resolvedAt: new Date(), 
-          resolvedBy: user.uid, 
-          resolutionReason: reason || 'Resolved by user'
-        });
       
-      console.log('✅ Emergency alert resolved successfully');
+      // Try to update Firebase if online and authenticated (optional)
+      if (user && !alertId.startsWith('local_')) {
+        try {
+          await firestore()
+            .collection('emergencyAlerts')
+            .doc(alertId)
+            .update({ 
+              status: 'resolved', 
+              resolvedAt: new Date(), 
+              resolvedBy: user.uid, 
+              resolutionReason: reason || 'Resolved by user'
+            });
+          console.log('✅ Emergency alert resolved in Firebase');
+        } catch (firebaseError) {
+          console.log('Firebase update failed (offline mode) - local resolution still works:', firebaseError);
+          // Continue with local resolution
+        }
+      } else {
+        console.log('Local alert resolution (offline mode)');
+      }
       
       // Stop audio recording if active
       if (isRecording) {
         await stopAudioRecording();
       }
       
-      // Clear current alert
-    setCurrentAlert(null);
+      // Clear current alert (works offline)
+      setCurrentAlert(null);
       
-      // Cancel SOS notification
-      pushNotificationService.cancelSOSNotification(alertId);
+      // Cancel SOS notification (works offline)
+      try {
+        pushNotificationService.cancelSOSNotification(alertId);
+      } catch (notifError) {
+        console.log('Notification cancel failed (offline mode):', notifError);
+      }
+      
+      console.log('✅ Emergency alert resolved successfully');
       
     } catch (error) {
       console.error('❌ Error resolving emergency alert:', error);
-      throw error;
+      // Still clear local alert even if Firebase fails
+      setCurrentAlert(null);
     }
   };
 
@@ -1288,17 +1394,28 @@ Sent from SafeHer app.`;
   const sendAlertToGuardians = async (location: any, message: string): Promise<void> => {
     try {
       const user = auth().currentUser;
-      if (!user) return;
-
-      console.log('👥 Sending alerts to guardians...');
-
-      const userDoc = await firestore().collection('users').doc(user.uid).get();
-      if (!userDoc.exists) {
-        console.log('User document not found');
+      if (!user) {
+        console.log('👥 No user authenticated - skipping guardian alerts (offline mode)');
         return;
       }
 
-      const userData = userDoc.data();
+      console.log('👥 Sending alerts to guardians...');
+
+      // Try to get user data from Firebase (optional, won't block if offline)
+      let userData = null;
+      try {
+        const userDoc = await firestore().collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          userData = userDoc.data();
+        } else {
+          console.log('User document not found - guardian alerts skipped (offline mode)');
+          return;
+        }
+      } catch (firebaseError) {
+        console.log('Firebase unavailable - guardian alerts skipped (offline mode):', firebaseError);
+        return; // Don't throw - this is optional functionality
+      }
+
       const userName = userData?.displayName || 'User';
       
       // Format location string
@@ -1323,40 +1440,47 @@ Sent from SafeHer app.`;
         console.log('📧 No guardian emails configured');
       }
 
-      // Send push notifications to guardians (if they have the app)
+      // Send push notifications to guardians (if they have the app) - optional, won't block if offline
       if (userData?.guardianEmails && userData.guardianEmails.length > 0) {
         console.log('📱 Sending push notifications to guardians...');
         
-        // Get guardian user IDs from emails
-        const guardianEmails = userData.guardianEmails;
-        const guardianUsersSnapshot = await firestore()
-          .collection('users')
-          .where('email', 'in', guardianEmails)
-          .get();
-        
-        const guardianTokens = guardianUsersSnapshot.docs
-          .map(doc => doc.data().fcmToken)
-          .filter(token => token);
-        
-        if (guardianTokens.length > 0) {
-          try {
-            await pushNotificationService.sendEmergencyAlertToGuardians(
-              guardianTokens,
-              userName,
-              location,
-              message
-            );
-            console.log(`✅ Push notifications sent to ${guardianTokens.length} guardians`);
-          } catch (pushError) {
-            console.error('❌ Failed to send push notifications:', pushError);
+        try {
+          // Get guardian user IDs from emails
+          const guardianEmails = userData.guardianEmails;
+          const guardianUsersSnapshot = await firestore()
+            .collection('users')
+            .where('email', 'in', guardianEmails)
+            .get();
+          
+          const guardianTokens = guardianUsersSnapshot.docs
+            .map(doc => doc.data().fcmToken)
+            .filter(token => token);
+          
+          if (guardianTokens.length > 0) {
+            try {
+              await pushNotificationService.sendEmergencyAlertToGuardians(
+                guardianTokens,
+                userName,
+                location,
+                message
+              );
+              console.log(`✅ Push notifications sent to ${guardianTokens.length} guardians`);
+            } catch (pushError) {
+              console.log('Push notifications failed (offline mode):', pushError);
+              // Don't throw - this is optional
+            }
+          } else {
+            console.log('📱 No guardian FCM tokens found');
           }
-        } else {
-          console.log('📱 No guardian FCM tokens found');
+        } catch (queryError) {
+          console.log('Guardian query failed (offline mode):', queryError);
+          // Don't throw - this is optional
         }
       }
 
     } catch (error) {
-      console.error('❌ Error sending alerts to guardians:', error);
+      console.log('Guardian alerts failed (offline mode) - this is optional:', error);
+      // Don't throw - guardian alerts are optional, SOS calls/SMS are more important
     }
   };
 

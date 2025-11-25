@@ -51,9 +51,9 @@ function TabNavigator() {
             case 'SelfDefense':
               iconName = focused ? 'karate' : 'karate';
               break;
-            case 'Community':
-              iconName = focused ? 'account-group' : 'account-group-outline';
-              break;
+            // case 'Community':
+            //   iconName = focused ? 'account-group' : 'account-group-outline';
+            //   break;
             case 'Profile':
               iconName = focused ? 'account-cog' : 'account-cog-outline';
               break;
@@ -96,11 +96,11 @@ function TabNavigator() {
         component={SelfDefenseScreen}
         options={{ title: 'Self Defense' }}
       />
-      <Tab.Screen 
+      {/* <Tab.Screen 
         name="Community" 
         component={CommunityScreen}
         options={{ title: 'Community' }}
-      />
+      /> */}
       <Tab.Screen 
         name="Profile" 
         component={ProfileScreen}

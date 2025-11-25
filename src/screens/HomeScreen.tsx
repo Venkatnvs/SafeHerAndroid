@@ -194,7 +194,23 @@ const HomeScreen = () => {
     console.log('🔴 No active emergency - triggering new SOS');
     try {
       await triggerSOS('One-tap SOS triggered from home screen');
-      navigation.navigate('Emergency' as never);
+      
+      // Wait a moment for state to update, then navigate
+      setTimeout(() => {
+        console.log('🔴 Navigating to Emergency screen after SOS trigger');
+        try {
+          navigation.navigate('Emergency' as never);
+        } catch (navError) {
+          console.error('🔴 Navigation error:', navError);
+          // Try alternative navigation method
+          try {
+            (navigation as any).push('Emergency');
+          } catch (pushError) {
+            console.error('🔴 Push navigation also failed:', pushError);
+            Alert.alert('Emergency Active', 'SOS has been triggered. Please navigate to Emergency screen manually.');
+          }
+        }
+      }, 300); // Small delay to ensure state is updated
     } catch (error) {
       console.error('🔴 Error triggering SOS:', error);
       Alert.alert('Error', 'Failed to trigger SOS. Please try again.');

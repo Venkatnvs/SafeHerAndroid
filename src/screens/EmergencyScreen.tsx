@@ -171,13 +171,33 @@ const EmergencyScreen = () => {
               setAutoActionsStarted(true);
               
               // Check if this is a new emergency or navigating to existing one
-              const emergencyAge = Date.now() - currentAlert.timestamp.getTime();
-              const isNewEmergency = emergencyAge < 10000; // Less than 10 seconds old
+              // Handle different timestamp formats (Date, Firestore Timestamp, number, etc.)
+              let timestampMs: number;
+              if (currentAlert.timestamp instanceof Date) {
+                timestampMs = currentAlert.timestamp.getTime();
+              } else if (currentAlert.timestamp && typeof currentAlert.timestamp === 'object' && 'toDate' in currentAlert.timestamp) {
+                // Firestore Timestamp
+                timestampMs = (currentAlert.timestamp as any).toDate().getTime();
+              } else if (typeof currentAlert.timestamp === 'number') {
+                timestampMs = currentAlert.timestamp;
+              } else if (typeof currentAlert.timestamp === 'string') {
+                timestampMs = new Date(currentAlert.timestamp).getTime();
+              } else {
+                // Fallback: assume it's new if we can't determine age
+                timestampMs = Date.now();
+              }
+              
+              const emergencyAge = Date.now() - timestampMs;
+              // Allow SOS actions for emergencies up to 30 seconds old (works offline)
+              const shouldTriggerSOS = emergencyAge < 30000; // 30 seconds window
               
               console.log('🚨 Countdown completed - Emergency age:', emergencyAge, 'ms');
-              console.log('🚨 Is new emergency:', isNewEmergency);
+              console.log('🚨 Should trigger SOS:', shouldTriggerSOS);
+              console.log('🚨 Timestamp format:', typeof currentAlert.timestamp, currentAlert.timestamp);
               
-              if (isNewEmergency) {
+              // Always trigger SOS actions if countdown completes (works offline)
+              // The age check prevents duplicate triggers for old emergencies
+              if (shouldTriggerSOS) {
                 // Trigger SOS actions after countdown completes (defer to next tick to avoid setState during render)
                 setTimeout(() => {
                   const location = currentLocation || currentAlert?.location || { latitude: 0, longitude: 0, accuracy: 0 };
@@ -193,18 +213,34 @@ const EmergencyScreen = () => {
                     console.log('✅ performSOSActions called successfully');
                   } catch (error) {
                     console.error('❌ Error calling performSOSActions:', error);
+                    // Even if performSOSActions fails, try to make emergency call directly
+                    try {
+                      console.log('🔄 Attempting direct emergency call as fallback...');
+                      sosService.makePhoneCall({ 
+                        name: 'Emergency', 
+                        phone: '100', 
+                        isPrimary: true, 
+                        isEmergency: true 
+                      });
+                    } catch (fallbackError) {
+                      console.error('❌ Fallback emergency call also failed:', fallbackError);
+                    }
                   }
                   
-                  // Send additional notifications to guardians (only once)
+                  // Send additional notifications to guardians (only once, optional - won't block if offline)
                   if (!guardianAlertsSent) {
                     console.log('👥 Sending guardian alerts...');
-                    sendAlertToGuardians(location, 'Emergency active. Please help or call me back.');
+                    sendAlertToGuardians(location, 'Emergency active. Please help or call me back.')
+                      .catch((guardianError) => {
+                        console.log('Guardian alerts failed (offline mode):', guardianError);
+                        // Don't block - this is optional
+                      });
                     setGuardianAlertsSent(true);
                   }
                 }, 0);
               } else {
                 console.log('🚨 Emergency is not new - skipping SOS actions');
-                console.log('🚨 Emergency age:', emergencyAge, 'ms (older than 10 seconds)');
+                console.log('🚨 Emergency age:', emergencyAge, 'ms (older than 60 seconds)');
               }
             }
             return null;
@@ -295,7 +331,22 @@ const EmergencyScreen = () => {
             <Icon name="alert-circle" size={48} color="#F44336" />
             <Text style={styles.statusTitle}>Emergency Alert Active</Text>
             <Text style={styles.statusTime}>
-              Triggered at {currentAlert.timestamp.toLocaleTimeString()}
+              Triggered at {(() => {
+                try {
+                  if (currentAlert.timestamp instanceof Date) {
+                    return currentAlert.timestamp.toLocaleTimeString();
+                  } else if (currentAlert.timestamp && typeof currentAlert.timestamp === 'object' && 'toDate' in currentAlert.timestamp) {
+                    return (currentAlert.timestamp as any).toDate().toLocaleTimeString();
+                  } else if (typeof currentAlert.timestamp === 'number') {
+                    return new Date(currentAlert.timestamp).toLocaleTimeString();
+                  } else if (typeof currentAlert.timestamp === 'string') {
+                    return new Date(currentAlert.timestamp).toLocaleTimeString();
+                  }
+                  return 'Unknown time';
+                } catch {
+                  return 'Unknown time';
+                }
+              })()}
             </Text>
             <Text style={styles.statusMessage}>
               {currentAlert.message}

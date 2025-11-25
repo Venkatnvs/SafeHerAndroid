@@ -65,61 +65,85 @@ export class SOSService {
 
       // Clean phone number for all methods (keep + and digits, remove -)
       const phoneNumber = String(contact.phone).replace(/[^\d+]/g, ''); // Clean phone number
-      console.log('Calling phone number:', phoneNumber);
+      console.log('📞 Calling phone number (automated call):', phoneNumber);
 
-      // Try native intent (send-intent) first for direct phone call
-      if (SendIntent && typeof SendIntent.sendPhoneCall === 'function') {
-        try {
-          console.log('Using SendIntent for phone call');
-          // react-native-send-intent expects a string phone number
-          await SendIntent.sendPhoneCall(phoneNumber);
-          return { success: true, contact };
-        } catch (sendIntentError) {
-          console.log('SendIntent phone call failed:', sendIntentError);
-        }
-      }
-
-      // Try system dialer next (most reliable UI path)
-      console.log('Using system dialer for phone call');
-      const phoneUrl = `tel:${phoneNumber}`;
-      try {
-        await Linking.openURL(phoneUrl);
-        return { success: true, contact };
-      } catch (error) {
-        console.log('System dialer failed, trying Communications library:', error);
-      }
-
-      // Try Communications library as fallback
-      if (Communications) {
-        try {
-          console.log('Using Communications library for phone call');
-          Communications.phonecall(phoneNumber, true);
-          return { success: true, contact };
-        } catch (communicationsError) {
-          console.log('Communications library failed:', communicationsError);
-        }
-      }
-
-      // Try immediate phone call library as final fallback
+      // PRIORITY 1: Try ImmediatePhoneCall first - places call automatically (works offline)
       if (ImmediatePhoneCall && typeof ImmediatePhoneCall.immediatePhoneCall === 'function') {
         try {
-          console.log('Using ImmediatePhoneCall library for phone call');
+          console.log('📞 Using ImmediatePhoneCall for AUTOMATED call (offline-capable)');
+          // ImmediatePhoneCall places the call automatically without user interaction
+          // This works offline - uses native Android call intent, not internet
           await ImmediatePhoneCall.immediatePhoneCall(phoneNumber);
+          console.log('✅ AUTOMATED call placed via ImmediatePhoneCall (works offline)');
           return { success: true, contact };
         } catch (immediateCallError) {
-          console.log('ImmediatePhoneCall library failed:', immediateCallError);
+          console.log('❌ ImmediatePhoneCall failed:', immediateCallError);
+          // Continue to next automated method
         }
       }
 
-      // If all methods fail
+      // PRIORITY 2: Try SendIntent - places call automatically (works offline)
+      if (SendIntent && typeof SendIntent.sendPhoneCall === 'function') {
+        try {
+          console.log('📞 Using SendIntent for AUTOMATED call (offline-capable)');
+          // react-native-send-intent sendPhoneCall places the call automatically
+          // This works offline - uses native Android intent, not internet
+          await SendIntent.sendPhoneCall(phoneNumber);
+          console.log('✅ AUTOMATED call placed via SendIntent (works offline)');
+          return { success: true, contact };
+        } catch (sendIntentError) {
+          console.log('❌ SendIntent phone call failed:', sendIntentError);
+          // Continue to next automated method
+        }
+      }
+
+      // PRIORITY 3: Try Communications library with immediate=true - places call automatically (works offline)
+      if (Communications) {
+        try {
+          console.log('📞 Using Communications library for AUTOMATED call (offline-capable)');
+          // Communications.phonecall(phoneNumber, true) - second param true = immediate call
+          // This places the call automatically without user interaction
+          // Works offline - uses native dialer, not internet
+          Communications.phonecall(phoneNumber, true);
+          console.log('✅ AUTOMATED call placed via Communications (works offline)');
+          return { success: true, contact };
+        } catch (communicationsError) {
+          console.log('❌ Communications library failed:', communicationsError);
+          // Continue to fallback (opens dialer, requires user to press call)
+        }
+      }
+
+      // FALLBACK: Try system dialer (opens dialer but requires user to press call button)
+      // This is last resort - not automated but better than nothing
+      console.log('📞 All automated methods failed, opening dialer as fallback (user must press call)');
+      const phoneUrl = `tel:${phoneNumber}`;
+      try {
+        // Directly open URL without canOpenURL check (works offline)
+        // Note: This only opens dialer, doesn't place call automatically
+        await Linking.openURL(phoneUrl);
+        console.log('⚠️ Phone dialer opened (user must press call button manually)');
+        return { success: true, contact };
+      } catch (error) {
+        console.log('❌ System dialer also failed:', error);
+        // All methods failed
+      }
+
+      // If all methods fail, log detailed error
+      console.error('❌ All phone call methods failed for:', contact.name, phoneNumber);
+      console.error('❌ Available methods checked:');
+      console.error('  - SendIntent:', !!SendIntent);
+      console.error('  - Linking.openURL:', 'available');
+      console.error('  - Communications:', !!Communications);
+      console.error('  - ImmediatePhoneCall:', !!ImmediatePhoneCall);
+      
       return { 
         success: false, 
         contact, 
-        error: 'All phone call methods failed' 
+        error: 'All phone call methods failed. Please check phone permissions and try manually dialing ' + phoneNumber
       };
 
     } catch (error) {
-      console.error(`Error making phone call to ${contact.name}:`, error);
+      console.error(`❌ Error making phone call to ${contact.name}:`, error);
       return { 
         success: false, 
         contact, 
